@@ -22,6 +22,7 @@ const recFile = existsSync(GOLDEN) ? readdirSync(GOLDEN).find((f) => f.startsWit
  * tick used. Water level (+68) is set before physics by 0x481a2c, so it is taken from i+1 too.
  */
 describe.skipIf(!recFile || !existsSync(join(ROOT, 'bin/extras/island.ter')))('bit-exact tick vs the golden recording', () => {
+  if (!recFile || !existsSync(join(ROOT, 'bin/extras/island.ter'))) return;
   const buf = readFileSync(join(GOLDEN, recFile!));
   const REC = 0x71c + 8, N = Math.floor(buf.length / REC);
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);

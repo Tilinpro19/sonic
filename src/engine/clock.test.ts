@@ -37,6 +37,7 @@ describe('FixedStep', () => {
 const GAME = resolve(process.env.SONICR_DIR ?? '../work/sonicr/app');
 
 describe.skipIf(!existsSync(GAME))('game speed is independent of the frame rate', () => {
+  if (!existsSync(GAME)) return;
   const info = TRACKS.find((t) => t.key === 'island')!;
   const col = new Collision(parseTerrain(readFileSync(join(GAME, info.ter))), info.playfield ? 0 : null);
   const p0 = parseTrack(readFileSync(join(GAME, info.bin))).lists.P0;
