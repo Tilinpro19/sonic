@@ -1,6 +1,7 @@
 /**
- * Where game files come from. The remaster never ships SEGA's assets: the user points it at their
- * own installed copy (folder picker), or in dev the Vite server exposes the local install at /game/.
+ * Where game files come from. The repository never ships SEGA's assets. In order of preference:
+ * files served next to the page at `game/` (the dev server exposes the local install there; a
+ * deploy may host them too), the copy saved in the browser (OPFS), or the user's folder pick.
  */
 export interface GameSource {
   label: string;
@@ -13,28 +14,34 @@ const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
 /** `city/city00.raw` → `city__city00.png` (flat, so Real-ESRGAN can batch one folder). */
 export const hdName = (p: string) => norm(p).replace(/\.raw$/, '').split('/').join('__') + '.png';
 
-export async function devSource(): Promise<GameSource | null> {
-  if (!import.meta.env.DEV) return null; // the build never looks for a copy on the server
-  try {
-    const r = await fetch('/game/sonicr.exe', { method: 'HEAD' });
-    if (!r.ok) return null;
-  } catch {
-    return null;
-  }
+/** A file every race needs; if the host serves it, it serves the game. */
+const PROBE = 'general/player00.raw';
+
+/** True when `r` is a real file, not a missing one or an SPA fallback page. */
+const isFile = (r: Response | null): r is Response => !!r?.ok && r.status !== 204 && !r.headers.get('content-type')?.includes('text/html');
+
+/**
+ * The game served over HTTP next to the page (relative `game/`, so it works under any sub-path),
+ * or null when the host has no copy.
+ */
+export async function webSource(): Promise<GameSource | null> {
+  const probe = await fetch('game/' + PROBE, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+  if (!isFile(probe)) return null;
+  const dev = import.meta.env.DEV;
+  const fetchFile = async (url: string) => {
+    const r = await fetch(url).catch(() => null);
+    return isFile(r) ? new Uint8Array(await r.arrayBuffer()) : null;
+  };
   return {
-    label: 'copia local (dev)',
+    label: dev ? 'copia local (dev)' : 'archivos del servidor',
     async get(path) {
       // Dev-only overrides (work/overrides) win over the installed copy when present.
-      const o = await fetch('/overrides/' + norm(path)).catch(() => null);
-      if (o?.status === 200) return new Uint8Array(await o.arrayBuffer());
-      const r = await fetch('/game/' + norm(path));
-      if (!r.ok) throw new Error(`No se encuentra ${path}`);
-      return new Uint8Array(await r.arrayBuffer());
+      const b = (dev ? await fetchFile('overrides/' + norm(path)) : null) ?? (await fetchFile('game/' + norm(path)));
+      if (!b) throw new Error(`No se encuentra ${path}`);
+      return b;
     },
-    async hd(path) {
-      const r = await fetch('/hd/' + hdName(path)).catch(() => null);
-      return r?.status === 200 ? new Uint8Array(await r.arrayBuffer()) : null;
-    },
+    // Dev mounts work/hd at /hd/ (204 when missing); a hosted copy keeps them in game/hd/, like a picked folder.
+    hd: (path) => fetchFile((dev ? 'hd/' : 'game/hd/') + hdName(path)),
   };
 }
 

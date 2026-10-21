@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { parseTrack } from './formats/track';
 import { TRACKS, type TrackInfo } from './formats/tracks';
-import { devSource, folderSource, pickedFiles, savedSource, saveCopy, forgetCopy, type GameSource } from './source';
+import { webSource, folderSource, pickedFiles, savedSource, saveCopy, forgetCopy, type GameSource } from './source';
 import { cropRaw, makePageTexture, type Quality } from './engine/textures';
 import { buildTrack, buildRings, toWorld, WATER_PAGE, WATER_TILE } from './engine/trackScene';
 import { buildSky } from './engine/sky';
@@ -95,10 +95,22 @@ for (const ev of ['pointerdown', 'keydown'] as const) addEventListener(ev, () =>
 const stageMusic = () => {
   if (current) audio.music(stageTrack(current.info.id, audio.mode, racer?.info.key === 'ssonic'), { loop: true });
 };
+// Downloaded so far, shown under the spinner (the first visit to a hosted copy fetches ~10 MB per track).
+let loadedBytes = 0;
 const getFile = (p: string) => {
   let f = fileCache.get(p);
-  if (!f) fileCache.set(p, (f = source.get(p)));
+  if (!f) {
+    fileCache.set(p, (f = source.get(p)));
+    f.then((b) => {
+      loadedBytes += b.length;
+      ui.loadingMsg.textContent = `${ui.loadingMsg.dataset.base ?? ''} · ${(loadedBytes / 1048576).toFixed(1)} MB`;
+    }, () => {});
+  }
   return f;
+};
+const loadingText = (t: string) => {
+  ui.loadingMsg.dataset.base = t;
+  ui.loadingMsg.textContent = t;
 };
 
 interface Loaded {
@@ -142,7 +154,7 @@ async function pageTexture(path: string, raw: Uint8Array) {
 
 async function loadTrack(info: TrackInfo) {
   ui.loading.hidden = false;
-  ui.loadingMsg.textContent = `Cargando ${info.name}…`;
+  loadingText(`Cargando ${info.name}…`);
   await new Promise((r) => setTimeout(r, 30)); // let the spinner paint (rAF stalls in hidden tabs)
   try {
     const [bin, skyRaw, ter, ...pageRaw] = await Promise.all([getFile(info.bin), getFile(info.sky), getFile(info.ter), ...info.pages.map(getFile)]);
@@ -805,9 +817,18 @@ ui.forget.onclick = async () => {
   location.reload();
 };
 
+// Start straight away when the game files are reachable (served with the page, or saved by an
+// earlier visit); the folder pick is only the fallback, so no flash of it while we look.
+ui.start.hidden = true;
+ui.loading.hidden = false;
+loadingText('Buscando los archivos del juego…');
 (async () => {
-  const s = (await devSource()) ?? (await savedSource());
-  if (!s) return;
+  const s = (await webSource()) ?? (await savedSource());
+  if (!s) {
+    ui.loading.hidden = true;
+    ui.start.hidden = false;
+    return;
+  }
   if (s.label.startsWith('copia guardada')) {
     ui.copy.textContent = 'Usando la copia guardada en el navegador.';
     ui.forget.hidden = false;
