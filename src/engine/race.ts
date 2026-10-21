@@ -8,7 +8,7 @@
  *   nearest loop point in 3D and a lap needs the 25/50/75 % checkpoints in order.
  * - Rings sit 50–75 units above the floor: picked up inside a sphere around the body centre.
  */
-import type { Runner, OriginalRunner } from './runner';
+import type { OriginalRunner } from './runner';
 
 type V3 = [number, number, number];
 
@@ -49,8 +49,21 @@ export class Race {
   /** Ticks since creation; keeps running after the finish (ring pop timing). */
   private clock = 0;
 
-  constructor(p0: readonly V3[], ringsLoader: readonly V3[]) {
-    this.loop = mainLoop(p0);
+  /**
+   * `start` (`.ter`): P1's grid slot. The grid (P4) is not at P0[0] on Island, City, Ruin and
+   * Factory, so the loop is rotated to begin at the line point nearest to it: laps count from there.
+   */
+  constructor(p0: readonly V3[], ringsLoader: readonly V3[], start?: { x: number; y: number; z: number }) {
+    const L = mainLoop(p0);
+    let s = 0;
+    if (start) {
+      let best = Infinity;
+      L.forEach(([x, y, z], i) => {
+        const d = (x - start.x) ** 2 + ((y - start.y) * 2) ** 2 + (z - start.z) ** 2;
+        if (d < best) { best = d; s = i; }
+      });
+    }
+    this.loop = [...L.slice(s), ...L.slice(0, s)];
     this.rings = ringsLoader.map(([x, y, z]) => [x, -y, z] as V3); // loader space → .ter
     this.taken = new Uint8Array(this.rings.length);
     this.takenAt = new Int32Array(this.rings.length);
@@ -74,7 +87,7 @@ export class Race {
   get lapTime() { return (this.ticks - this.lapStart) / 30; }
 
   /** Call once per runner tick. */
-  tick(r: Runner | OriginalRunner | { x: number; y: number; z: number }): RaceEvents {
+  tick(r: OriginalRunner | { x: number; y: number; z: number }): RaceEvents {
     const ev: RaceEvents = { rings: 0, lap: false, finished: false };
     this.clock++;
     if (!this.finished) this.ticks++;

@@ -11,19 +11,18 @@
  * - Unstuck routines (hop/jump or reverse if blocked by a wall or obstacle).
  * - Multi-racer start grid positions and real-time standing/ranking calculation.
  */
-import { Runner, OriginalRunner, type Input } from './runner';
+import { OriginalRunner, type Input } from './runner';
 import type { Collision } from './collision';
 import { applyWarp } from './warps';
 import { loopsOf } from './loops';
 
 export type V3 = [number, number, number];
-export type AnyRunner = Runner | OriginalRunner;
 
 export interface BotState {
   name: string;
   charKey: string;
   charIndex: number;
-  runner: AnyRunner;
+  runner: OriginalRunner;
   laneOffset: number;
   skill: number;
   /** Pursuit distance in ticks of travel at the current speed (plus a fixed 120 units). */
@@ -40,7 +39,7 @@ export interface BotState {
   /** Throttle plan (index into PLANS) and ticks until it is re-planned. */
   plan: number;
   planTicks: number;
-  sim?: AnyRunner;
+  sim?: OriginalRunner;
   /** Furthest arc length reached this lap, ticks since it last grew, ticks spent fallen off. */
   best: number;
   stall: number;
@@ -50,7 +49,8 @@ export interface BotState {
 }
 
 /**
- * Calculates start grid slot coordinates in .ter space.
+ * Made-up start grid along an arbitrary loop (synthetic-loop tests only). The game uses the
+ * original grid from track list P4: `startSlot` in original.ts.
  * Slot 0 is front-left (Player), Slot 1 front-right, Slot 2 second row left, etc.
  */
 export function calculateGridSlot(
@@ -100,13 +100,12 @@ export function createBot(
   name: string,
   laneOffset: number,
   skill = 0.95,
-  useOriginal = false,
 ): BotState {
   return {
     name,
     charKey,
     charIndex,
-    runner: useOriginal && col.origTerrain ? new OriginalRunner(col, charIndex) : new Runner(col, charIndex),
+    runner: new OriginalRunner(col, charIndex),
     laneOffset,
     skill,
     lookAhead: 8,
@@ -141,7 +140,7 @@ const JUMP_COST = 60;
 const PLAN_EVERY = 5, HORIZON = 30, HOLD = 10;
 
 /** Nearest loop point to the runner, searched a little behind and ahead of `from`. */
-function nearestPoint(loop: readonly V3[], r: AnyRunner, from: number, back: number, ahead: number) {
+function nearestPoint(loop: readonly V3[], r: OriginalRunner, from: number, back: number, ahead: number) {
   const N = loop.length;
   let best = Infinity, nearest = from;
   for (let o = -back; o <= ahead; o++) {
@@ -154,7 +153,7 @@ function nearestPoint(loop: readonly V3[], r: AnyRunner, from: number, back: num
 }
 
 /** Steering towards the pursuit point; `delta` is the heading error (12-bit units). */
-function pursue(bot: BotState, r: AnyRunner, loop: readonly V3[], near: number) {
+function pursue(bot: BotState, r: OriginalRunner, loop: readonly V3[], near: number) {
   // P0 points are 150–400 units apart, so a fixed index look-ahead would cut corners off ledges.
   // Sliding wide (grip is weak), aim closer so the bot heads back to the line.
   const p = loop[near], off = Math.hypot(r.x - p[0], r.z - p[2]);
@@ -187,7 +186,7 @@ function arcs(loop: readonly V3[]) {
  * (no floor under the line) it is unbounded. Cached per line.
  */
 const EDGES = new WeakMap<readonly V3[], [number, number][]>();
-function edgesOf(loop: readonly V3[], col: Runner['col']) {
+function edgesOf(loop: readonly V3[], col: OriginalRunner['col']) {
   let E = EDGES.get(loop);
   if (!E) {
     const N = loop.length;
@@ -211,7 +210,7 @@ function edgesOf(loop: readonly V3[], col: Runner['col']) {
 
 /** Per line point: a launcher (sector trigger) on the road under it, within 250 either side. */
 const PADS = new WeakMap<readonly V3[], boolean[]>();
-function padsOf(loop: readonly V3[], col: Runner['col']) {
+function padsOf(loop: readonly V3[], col: OriginalRunner['col']) {
   let p = PADS.get(loop);
   if (!p) {
     const N = loop.length;
@@ -239,7 +238,7 @@ const EDGE_WEIGHT = 3;
  */
 function choosePlan(bot: BotState, loop: readonly V3[]): number {
   const r = bot.runner, N = loop.length, arc = arcs(loop), total = arc[N];
-  const sim = (bot.sim ??= r instanceof OriginalRunner ? new OriginalRunner(r.col, r.charIndex) : new Runner(r.col, r.charIndex));
+  const sim = (bot.sim ??= new OriginalRunner(r.col, r.charIndex));
   const s0 = arc[bot.progress];
   let best = 0, bestScore = -Infinity, accelFatal = false;
   // A launch pad just ahead does the jumping: hopping now would sail over it (Factory p45).
@@ -249,11 +248,7 @@ function choosePlan(bot: BotState, loop: readonly V3[]): number {
   for (let o = 0; o <= 4 && !padAhead; o++) padAhead = pads[(bot.progress + o) % N];
   for (let k = 0; k < PLANS.length; k++) {
     if (PLANS[k].jump && padAhead && r.grounded) continue;
-    if (r instanceof OriginalRunner && sim instanceof OriginalRunner) {
-      sim.copyFrom(r);
-    } else {
-      Object.assign(sim, r);
-    }
+    sim.copyFrom(r);
     let near = bot.progress, worst = 0;
     for (let t = 0; t < HORIZON; t++) {
       near = nearestPoint(loop, sim, near, 2, 6);

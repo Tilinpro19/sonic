@@ -6,9 +6,9 @@
  * in 20.12 like the original struct, angles in 12 bits, and every division truncates like `idiv`.
  *
  * Checked against the golden recording (`work/tools/golden/p1_struct_*.rec`, Sonic on Island):
- * see original.test.ts. Not ported yet: jumps (0x4853a8), spin dash and character abilities
- * (the 0x485a85 switch), springs (0x4855e8), loop rides (0x4d59f8), racer-vs-racer (0x4201a0)
- * and the water level, which the caller supplies (`water`, from 0x4819b0/0x481a2c).
+ * see original.test.ts (jumps, the ring dash and racer-vs-racer 0x4201a0 included; the recording
+ * has no spring, spin dash or ability: those are tested on flat ground). Not ported yet: loop
+ * rides (0x4d59f8) and the Robotnik / Egg Robo hover (0x480910).
  */
 
 // ---------- sine LUT 0x92568c (2^14 scale; cos = sin + 1024) ----------
@@ -53,6 +53,10 @@ export const IN = {
   /** Low 0x08 and 0x80 together brake; alone they widen / tighten the turn by ±0x200/1024. */
   SHARP: 0x0008,
   SOFT: 0x0080,
+  /** High 0x20: spin dash held; high 0x01: rev (charges one level per press while spinning). */
+  SPIN: 0x2000,
+  REV: 0x0100,
+  JUMP: 0x0400, // any of 0x620
 } as const;
 
 /** The racer struct fields the ported code reads and writes (struct offset in the comments). */
@@ -69,7 +73,8 @@ export interface OrigRacer {
   drift: number; // +6c skid counter
   driftDir: number; // +6e
   grounded: number; // +72
-  jumpLock: number; // +78
+  dash: number; // +78 ring dash step (3, 6, … up to dashEnd), 0 = none
+  dashEnd?: number; // +7c
   air: number; // +96
   pri: number; // +a4 floor layer
   sector: number; quad: number; // +a8 +ac floor face
@@ -81,18 +86,21 @@ export interface OrigRacer {
   camber: number; // +de yaw drift while grounded
   alt40: number; // +40 (1 → vmax = table +24)
   slide42: number; // +42
+  jumpState?: number; // +74 jump button: 1 pressed on the ground, 2 held since pressed in the air, −1 held/locked
   hasJumped?: number; // +76 (jump initiated from ground)
-  special?: number; // +fe (character ability: 1 Tails fly, 3 Amy boost, 4 Knuckles glide)
+  spin?: number; // +86 spin dash: ≤0 roll countdown, 1 rolling, 2..6 charge (+0x80 rev latch)
+  special?: number; // +fe (character ability: 1 Tails fly, 3 Amy boost, 4 Knuckles glide, 10 Tails Doll hover)
   boostTimer?: number; // +7e (Amy boost charge timer)
+  anim?: number; // +ea animation request (7 jump, 8 rev, 9 spin release, 0xa roll, 0xd second jump)
 }
 
 export function newRacer(char: number, x: number, y: number, z: number, yaw: number): OrigRacer {
   return {
     char, x, y, z, yaw, px: x, py: y, pz: z, dy: 0, vx: 0, vy: 0, vz: 0, floorY: y, fwd: 0, lat: 0, water: 0,
-    drift: 0, driftDir: 0, grounded: 1, jumpLock: 0, air: 0, pri: 0, sector: 0, quad: 0, hasFloor: 0,
+    drift: 0, driftDir: 0, grounded: 1, dash: 0, dashEnd: 0, air: 0, pri: 0, sector: 0, quad: 0, hasFloor: 0,
     prevHasFloor: 0,
     n: [0, -4096, 0], hitWall: 0, rings: 0, camber: 0, alt40: 0, slide42: 0,
-    hasJumped: 0, special: 0, boostTimer: 0,
+    jumpState: 0, hasJumped: 0, spin: 0, special: 0, boostTimer: 0, anim: 0,
   };
 }
 
@@ -138,6 +146,25 @@ export function jump(r: OrigRacer, jumpImpulse: number): number {
   }
 }
 
+// ---------- start grid 0x47108c (race setup 0x475848) ----------
+/** Racer slot i (0 = P1) starts on track list P4[GRID[i]]: P1 in the middle, rivals around it. */
+const GRID = [7, 6, 8, 5, 9];
+/** Table 0x4feb00 + 8·track: starting floor layer (+a4) and heading (+10), the same for all five. */
+const START: Record<number, [pri: number, yaw: number]> = { 1: [0, 3072], 2: [2, 3648], 3: [0, 3072], 4: [0, 0], 5: [2, 2560] };
+
+export interface StartSlot { x: number; y: number; z: number; yaw: number; pri: number }
+
+/**
+ * Where racer `slot` (0–4) stands at the start, in `.ter` units. `p4` is track list P4 as stored
+ * in the file (the loader negates z; the struct gets (x << 12, −y << 12, z << 12)), so `.ter` =
+ * (x, −y, −z). Pitch, roll and speeds start at 0. The intro camera (P1) is separate.
+ */
+export function startSlot(p4: readonly (readonly number[])[], track: number, slot: number): StartSlot {
+  const [x, y, z] = p4[GRID[slot]];
+  const [pri, yaw] = START[track] ?? START[1];
+  return { x, y: -y, z: -z, yaw, pri };
+}
+
 /**
  * 0x4855e8: sector launchers and springs.
  */
@@ -164,95 +191,158 @@ export function springs(t: OrigTerrain, r: OrigRacer): boolean {
 
 
 /**
- * Running physics of 0x485768 (state +0x86 < 2, no jump): slope push, steering, local-frame grip,
- * drag, acceleration and caps, then x/z += velocity and gravity on y.
+ * Character switch 0x485a85 (jump table 0x485740 on +f2), run right after the previous position is
+ * saved and before the slope push. It reads last tick's jump state (+74), so a second press in the
+ * air is what Sonic's double jump and the Tails / Knuckles flight wait for. Robotnik and Egg Robo
+ * (cases 4 and 8) hover in 0x480910, not ported.
  */
-export function physicsTick(r: OrigRacer, input: number) {
-  const T = PHYS_TABLE[r.char];
-  const lo = input & 0xff, hi = (input >> 8) & 0xff;
-  let vmax = T[0], accel = tdiv(T[1] * 3, 2), turn = T[2], grip = T[3];
-  const drag = T[4];
-  r.dy = r.y - r.py;
-  r.px = r.x; r.py = r.y; r.pz = r.z;
-  const grounded = r.grounded !== 0;
-
-  // Floors steeper than ny = −3784 push down the slope (half as hard while accelerating).
-  if (grounded && r.n[1] > -3784 && r.slide42 === 0) {
-    const k = hi & 0x11 && !(lo & 8 && lo & 0x80);
-    r.vx += k ? r.n[0] >> 1 : r.n[0] * 2;
-    r.vz += k ? r.n[2] >> 1 : r.n[2] * 2;
-  }
-
-  // Jump and gravity (0x4853a8 / 0x486106..0x48629a)
-  const jumpImpulse = T[5] >> 1;
-  const jumpPressed = (input & 0x620) !== 0;
-
-  if (jumpPressed && r.water === 0 && r.jumpLock === 0 && grounded && jumpImpulse > 0) {
-    r.hasJumped = 1;
-    r.grounded = 0;
-    r.air = 2;
-    const ret = jump(r, jumpImpulse);
-    r.vy = ret + 0x2000;
-    if (r.vy > 0x25800) r.vy = 0x25800;
-  } else if (!jumpPressed && r.hasJumped) {
-    r.hasJumped = 0;
-    if (r.vy < 0) {
-      let v = r.vy;
-      if (v < -0xc800) v += 0x6000;
-      r.vy = tsar(v, 1);
+function abilities(r: OrigRacer, input: number, k: { vmax: number; accel: number; turn: number; input: number }) {
+  const T = PHYS_TABLE[r.char], js = r.jumpState ?? 0;
+  switch (r.char) {
+    case 0: case 9: // Sonic, Super Sonic: second jump once the air step reaches 10
+      if (r.air === 10) {
+        if (js === 2) { r.anim = 0xd; r.vy = -0x20000; r.air = 1; }
+      } else if (r.air > 1) r.air++;
+      break;
+    case 1: case 2: case 7: { // Tails flies (+fe 1); Knuckles and Metal Knuckles glide (4)
+      const sp = r.char === 1 ? 1 : 4;
+      if (r.air === 2 && js === 2) r.special = sp;
+      if (r.special !== sp) break;
+      k.vmax = T[6];
+      if (js !== 2 || r.grounded || (sp === 1 && r.air > 0x3c)) { r.jumpState = -1; r.special = 0; }
+      if (sp === 1) r.air++; else r.air = 3;
+      break;
     }
-    if (grounded) r.vy = 0;
-    else r.air = (r.air || 0) + 1;
-  } else if (!grounded) {
-    // Airborne abilities (0x485a85)
-    if (r.char === 0 || r.char === 9) {
-      if (r.air === 10 && jumpPressed && !r.hasJumped) {
-        r.vy = -0x20000;
-        r.air = 1;
-      }
-    } else if (r.char === 1) {
-      if (jumpPressed && (r.air || 0) >= 2 && (!r.special || r.special === 1) && (r.air || 0) <= 60) {
-        r.special = 1;
-        r.vy = 0;
-      } else {
-        r.special = 0;
-      }
-    } else if (r.char === 2 || r.char === 7) {
-      if (jumpPressed && (!r.special || r.special === 4)) {
-        r.special = 4;
-        r.vy = 0x6000;
-        r.air = 3;
-      } else {
-        r.special = 0;
-      }
-    }
-    if (r.special !== 1 && r.special !== 4) {
-      r.vy = Math.min(r.vy + 0x2000, 0x25800);
-    }
-    r.air = (r.air || 0) + 1;
-  } else {
-    r.vy = 0;
-  }
-  r.y += r.vy;
-
-  // Effective top speed: rings bonus, water, abilities.
-  if (r.char === 3) {
-    if (jumpPressed && r.special !== 2) {
-      if (!r.boostTimer) r.boostTimer = 0x186;
-    }
-    if (r.boostTimer && r.boostTimer > 0) {
-      if (r.boostTimer > 0x12c) {
-        r.special = 3;
+    case 3: { // Amy: jump starts a 0x186-tick timer, boosting while it is above 0x12c
+      if (input & 0x620 && r.special !== 2 && !r.boostTimer) r.boostTimer = 0x186;
+      const t = r.boostTimer ?? 0;
+      if ((t & 0x7fff) > 0x12c) {
+        if (r.special !== 2) r.special = 3;
+        k.turn = tsar(k.turn, 2);
+        k.input |= IN.REV; // counts as accelerating
+        k.vmax = T[6];
+        k.accel *= 4;
         r.slide42 = 2;
-        vmax *= 2;
       } else {
         if (r.special === 3) r.special = 0;
         r.slide42 = 0;
       }
-      r.boostTimer--;
+      if (t > 0) r.boostTimer = t - 1;
+      break;
     }
+    case 6: // Tails Doll: jump hovers within 0x60000 of the floor
+      if (input & 0x620) {
+        r.special = 0xa;
+        if (r.grounded === 1) { r.vy = -0x4000; r.air = 1; r.grounded = 0; }
+        if (r.floorY - 0x60000 < r.y && r.vy > -0x8000) r.vy -= 0x3000;
+        if (r.floorY + 0x60000 > r.y && r.vy < 0x8000) r.vy -= 0x1000;
+      } else if (r.special === 0xa) r.special = 0;
+      break;
+  }
+}
+
+/**
+ * Spin dash (+86, Sonic / Tails / Knuckles only; 0x485eb2..0x4860b0). Holding spin on the ground
+ * while standing still starts charging at level 2; each rev press (bit 0x80 latches it until the
+ * button is let go) adds a level up to 6. Letting go launches along the yaw at (level − 2)/4 of the
+ * table's +1C speed and leaves the racer rolling (1: +1C top speed, turn / 6) until it stops.
+ * Holding spin while moving rolls after 5 ticks. Returns whether this tick released a charge.
+ */
+function spinDash(r: OrigRacer, input: number, k: { vmax: number; turn: number }): boolean {
+  const hi = (input >> 8) & 0xff, S = r.spin ?? 0, still = !r.fwd && !r.lat && !r.vx && !r.vz;
+  if (S <= 0) {
+    if (!(hi & 0x20) || r.grounded !== 1 || r.water !== 0 || hi & 0xc0) r.spin = 0;
+    else if (still) r.spin = 2;
+    else if ((r.spin = S - 1) < -4) { r.anim = 0xa; r.spin = 1; }
+    return false;
+  }
+  if (S >= 2 && hi & 0x20) {
+    if (!(hi & 1)) r.spin = S & 0x7f;
+    else if (S < 0x80) { r.spin = Math.min(S + 0x81, 0x86); r.anim = 8; }
+    return false;
+  }
+  if (S === 2) { r.spin = 0; return false; } // let go before the first rev
+  const T = PHYS_TABLE[r.char];
+  k.vmax = T[7];
+  let released = false;
+  if (S > 2) {
+    const lvl = (S & 0x7f) - 2, sp = T[7] >> 12, a = r.yaw & 0xfff;
+    r.vx = Math.imul(Math.imul(SIN[a], sp), lvl) >> 4;
+    r.vz = Math.imul(Math.imul(SIN[a + 1024], sp), lvl) >> 4;
+    r.anim = 9;
+    released = true;
+  }
+  k.turn = tdiv(k.turn, 6);
+  r.spin = !r.fwd && !r.lat && !r.vx && !r.vz ? 0 : 1;
+  return released;
+}
+
+/**
+ * 0x485768: character abilities, slope push, spin dash, jump and gravity, then (unless charging a
+ * spin dash) steering, local-frame grip, drag, acceleration and caps, and x/z += velocity.
+ */
+export function physicsTick(r: OrigRacer, input: number) {
+  const T = PHYS_TABLE[r.char];
+  r.dy = r.y - r.py;
+  r.px = r.x; r.py = r.y; r.pz = r.z;
+  const ab = { vmax: T[0], accel: tdiv(T[1] * 3, 2), turn: T[2], input };
+  abilities(r, input, ab);
+  input = ab.input;
+  const lo = input & 0xff, hi = (input >> 8) & 0xff;
+  let { vmax, accel, turn } = ab;
+  let grip = T[3];
+  const drag = T[4];
+  const grounded = r.grounded !== 0;
+
+  // Floors steeper than ny = −3784 push down the slope (half as hard while accelerating, not spinning).
+  if (grounded && r.n[1] > -3784 && r.slide42 === 0) {
+    const half = hi & 0x11 && !((r.spin ?? 0) > 0) && !(lo & 8 && lo & 0x80);
+    r.vx += half ? r.n[0] >> 1 : r.n[0] * 2;
+    r.vz += half ? r.n[2] >> 1 : r.n[2] * 2;
   }
 
+  let released = false;
+  if (r.char < 3) {
+    const s = { vmax, turn };
+    released = spinDash(r, input, s);
+    ({ vmax, turn } = s);
+  }
+
+  // Jump button state, jump (0x4853a8) and gravity: 0x4860dc..0x48623a, skipped while charging.
+  if ((r.spin ?? 0) < 2 && !released) {
+    const jumpImpulse = T[5] >> 1;
+    let vy = r.vy, gravity = true;
+    let js = 0;
+    if (jumpImpulse) {
+      const prev = r.jumpState ?? 0;
+      if (input & 0x620 && r.water === 0 && r.dash === 0) js = prev === 0 || prev === 2 ? (r.grounded ? 1 : 2) : -1;
+      r.jumpState = js;
+    }
+    if (js > 0 && r.grounded) {
+      r.hasJumped = 1;
+      r.grounded = 0;
+      r.spin = 0;
+      r.air = 2;
+      r.anim = 7;
+      vy = jump(r, jumpImpulse);
+    } else if ((js === 0 || r.grounded) && r.hasJumped && vy < 0) {
+      // Let go during the rise: cut it (0x48629a).
+      if (vy < -0xc800) vy += 0x6000;
+      vy = tsar(vy, 1);
+      r.hasJumped = 0;
+      gravity = false;
+    }
+    if (gravity) {
+      vy = Math.min(vy + 0x2000, 0x25800);
+      if (r.grounded) vy = 0;
+    }
+    if (r.special === 1) vy = 0;
+    if (r.special === 4) vy = 0x6000;
+    r.vy = vy;
+    r.y += vy;
+  }
+
+  // Effective top speed: rings bonus, water, abilities.
   vmax += tdiv(r.rings * vmax, 1000);
   const inWater = r.water !== 0;
   if (inWater) vmax = r.water === 0x60000 ? T[8] : tdiv(T[8], 2);
@@ -285,6 +375,7 @@ export function physicsTick(r: OrigRacer, input: number) {
   if (r.driftDir === -1 && -r.fwd <= r.lat) r.driftDir = 0;
   if (grounded) r.yaw += r.camber;
   r.yaw &= 0xfff;
+  if ((r.spin ?? 0) >= 2) return; // charging: no speed rules and no movement (0x486524)
 
   // World → local (yaw negated), forward/lateral rules, back to world.
   const a = (0x1000 - r.yaw) & 0xfff, s = sin4(a), c = cos4(a);
@@ -327,6 +418,7 @@ export class OrigTerrain {
   private off: number[];
   readonly x0: number; readonly z0: number; readonly cx: number; readonly cz: number;
   playfieldWater?: PlayfieldWater;
+  ringDash?: RingDash;
   constructor(buf: ArrayBuffer | Uint8Array, readonly track = 1) {
     const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     this.v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
@@ -549,7 +641,7 @@ export function collide(t: OrigTerrain, r: OrigRacer) {
   hitWalls(t, r);
   findFloor(t, r);
   updateNormal(t, r);
-  if (r.jumpLock === 0) slopeRescale(r);
+  if (r.dash === 0) slopeRescale(r);
   if (r.grounded) {
     r.vy = 0;
     r.y = r.floorY;
@@ -604,11 +696,111 @@ export function updateWater(r: OrigRacer, pf?: PlayfieldWater) {
   r.prevHasFloor = r.hasFloor;
 }
 
-/** One full tick: water update, physics, then collision. */
+/**
+ * Ring dash pad of each track (index = stage id): the type-4 entry of the per-track trigger tables
+ * read by 0x47f13c (Island 0x500608, City 0x500164, Factory 0x4fff68, Ruin 0x4ffde8, Emerald
+ * 0x4ffd20; switch 0x47fafc). The object index is the track mesh index (A ribbons, then B objects); all five are B
+ * objects, checked in 2D within 128 units of the object's position.
+ */
+export const RING_DASH_PAD = [-1, 503, 899, 780, 784, 830];
+
+/** Pad position (.ter units) and step list: P6 i16 (dx, −dz, raw yaw), as 0x42804a stores it. */
+export interface RingDash { x: number; z: number; steps: readonly (readonly number[])[] }
+
+/** Builds the ring dash of a track from its parsed `_?.bin` (mesh origins are (ox, oy, −oz)). */
+export function ringDashFor(trackId: number, meshes: readonly { origin: readonly number[] }[], p6: readonly (readonly number[])[]): RingDash | undefined {
+  const m = meshes[RING_DASH_PAD[trackId] ?? -1];
+  return m && p6.length ? { x: m.origin[0], z: m.origin[2], steps: p6 } : undefined;
+}
+
+/**
+ * 0x47f1fc, object type 4: on the pad, grounded and with rings, the racer pays up to 50 rings
+ * (3 steps each) and is carried along P6 one step per tick, after physics and collision. Each step
+ * adds (dx, dz) to the position and sets the yaw; velocity is zero until the last step, which
+ * launches along the yaw at 8× the sine table (2^17 = 32 units/tick).
+ */
+export function ringDash(t: OrigTerrain, r: OrigRacer) {
+  const d = t.ringDash;
+  if (!d) return;
+  if (r.dash === 0 && r.rings > 0 && r.grounded && (t.track !== 3 || r.pri === 0)) {
+    const dx = d.x - (r.x >> 12), dz = d.z - (r.z >> 12);
+    if (dx * dx + dz * dz < 128 * 128) {
+      r.dash = 3;
+      if (r.rings < 50) { r.dashEnd = r.rings * 3; r.rings = 0; } else { r.dashEnd = 150; r.rings -= 50; }
+    }
+  }
+  if (r.dash === 0) return;
+  const e = d.steps[r.dash / 3 - 1];
+  r.vx = 0; r.vz = 0;
+  r.x += e[0] << 12;
+  r.z += -e[1] << 12;
+  r.yaw = (0xfff - e[2] + 0x800) & 0xfff;
+  r.dash += 3;
+  if ((r.dashEnd ?? 0) < r.dash) {
+    r.vx = SIN[r.yaw] * 8;
+    r.vz = SIN[r.yaw + 1024] * 8;
+    r.dash = 0;
+  }
+}
+
+/** Byte table 0x4fa260: racer size per character, turned into the hit radius +1c6 by 0x41e0b4. */
+export const RACER_SIZE = [20, 20, 28, 44, 44, 20, 20, 22, 40, 20];
+/** Hit radius (+1c6, .ter units): size · 7/8, or · 9/8 in tag mode ([0x8fb954] == 2). */
+export const hitRadius = (char: number, tag = false) => tsar((RACER_SIZE[char] ?? 20) * (tag ? 9 : 7), 3);
+
+/**
+ * 0x4201a0 + 0x41ffd0: racer-vs-racer, run for every pair after all racers' physics and terrain
+ * collision (0x4c9044, 5 racers; 0x4c92b4, 2). Only velocities change: the prev → current moves are
+ * swept in 16 steps; at the first step closer than ra + rb (3D, `>>12` per axis) both racers keep
+ * 14/16 of vx/vz and are pushed apart along the xz separation · k/64, with k = (sum of both
+ * displacements >> 8, >> 3) limited to 7…20. Skipped while either one rides the ring dash.
+ * The original also sets +204 = 0x30001 on both (and a voice cue on the first racer).
+ */
+export function racerCollision(a: OrigRacer, b: OrigRacer, ra = hitRadius(a.char), rb = hitRadius(b.char)): boolean {
+  if (a.dash || b.dash) return false;
+  const R = ra + rb, q = tsar(R, 2);
+  // Coarse gate in 16-unit cells: b now against a before.
+  const gx = (b.x - a.px) >> 16, gy = (b.y - a.py) >> 16, gz = (b.z - a.pz) >> 16;
+  if (!(Math.imul(q, q) > w32(Math.imul(gx, gx) + Math.imul(gy, gy) + Math.imul(gz, gz)))) return false;
+  const sax = tsar(a.x - a.px, 4), say = tsar(a.y - a.py, 4), saz = tsar(a.z - a.pz, 4);
+  const sbx = tsar(b.x - b.px, 4), sby = tsar(b.y - b.py, 4), sbz = tsar(b.z - b.pz, 4);
+  let ax = a.px, ay = a.py, az = a.pz, bx = b.px, by = b.py, bz = b.pz;
+  for (let s = 1; ; s++) {
+    if (s > 16) return false;
+    ax += sax; ay += say; az += saz; bx += sbx; by += sby; bz += sbz;
+    const dx = (bx - ax) >> 12, dy = (by - ay) >> 12, dz = (bz - az) >> 12;
+    if (w32(Math.imul(dx, dx) + Math.imul(dy, dy) + Math.imul(dz, dz)) < Math.imul(R, R)) break;
+  }
+  // 0x41ffd0
+  const disp = (r: OrigRacer) => {
+    const x = tsar(r.x - r.px, 8), z = tsar(r.z - r.pz, 8);
+    return isqrt24(w32(Math.imul(x, x) + Math.imul(z, z)));
+  };
+  const k = Math.max(7, Math.min(20, tsar(disp(a) + disp(b), 3)));
+  for (const r of [a, b]) { r.vx = tsar(w32(r.vx * 14), 4); r.vz = tsar(w32(r.vz * 14), 4); }
+  const px = Math.imul(tsar(w32(bx - ax), 3), k) >> 3, pz = Math.imul(tsar(w32(bz - az), 3), k) >> 3;
+  b.vx = w32(b.vx + px); b.vz = w32(b.vz + pz);
+  a.vx = w32(a.vx - px); a.vz = w32(a.vz - pz);
+  return true;
+}
+
+/** 0x4c9044: every pair in slot order (0-1, 0-2, …, 3-4). Returns which racers were hit. */
+export function collideRacers(rs: readonly OrigRacer[], tag = false): boolean[] {
+  const hit = rs.map(() => false);
+  for (let i = 0; i < rs.length; i++) {
+    for (let j = i + 1; j < rs.length; j++) {
+      if (racerCollision(rs[i], rs[j], hitRadius(rs[i].char, tag), hitRadius(rs[j].char, tag))) hit[i] = hit[j] = true;
+    }
+  }
+  return hit;
+}
+
+/** One full tick: water update, physics, collision, then the ring dash. */
 export function tick(t: OrigTerrain, r: OrigRacer, input: number) {
   if (t.playfieldWater) {
     updateWater(r, t.playfieldWater);
   }
   physicsTick(r, input);
   collide(t, r);
+  ringDash(t, r);
 }

@@ -4,7 +4,7 @@
  * Music is CD audio in the original (PlayCD @ 0x4d01ac, MCI "cdaudio"); this repack ships it as
  * music/TrackNN.mp3. Race music (state machine 0x4d0bc4): track 3 (pre-race jingle) once, then
  * the stage track, restarted whenever it stops. Stage track = table 0x4fbed8[stageId] + offset:
- *   Island 6, City 7, Ruin 9, Factory 8, Emerald 10 (11 when Super Sonic races, 0x4fbef0);
+ *   Island 6, City 7, Factory 9, Ruin 8, Emerald 10 (11 when Super Sonic races, 0x4fbef0);
  *   offset 0 with vocals, +6 for the instrumental versions (flag [0x8fb8e4]).
  * After the finish: 0x13 + (P1 position == winner) → 20 won / 19 lost [P]. Menus: 5.
  * Effects: sound/sfx/*.wav, the same files the exe names.

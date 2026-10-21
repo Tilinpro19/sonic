@@ -4,7 +4,7 @@
  * reaching the start of such a segment moves the racer to its end, keeping its speed and turning
  * it down the line. [P] The original's portal objects/trigger volumes are not located yet.
  */
-import type { Runner, OriginalRunner } from './runner';
+import type { OriginalRunner } from './runner';
 
 type V3 = readonly [number, number, number] | readonly number[];
 
@@ -38,7 +38,7 @@ export function warpsOf(loop: readonly V3[]): Warp[] {
 }
 
 /** Teleports `r` if it is at a warp's entry. Returns whether it did. */
-export function applyWarp(r: Runner | OriginalRunner, loop: readonly V3[]): boolean {
+export function applyWarp(r: OriginalRunner, loop: readonly V3[]): boolean {
   for (const w of warpsOf(loop)) {
     if (Math.hypot(r.x - w.from[0], r.z - w.from[2]) > RADIUS || Math.abs(r.y - w.from[1]) > REACH) continue;
     const speed = Math.hypot(r.vx, r.vz), a = (w.yaw * Math.PI) / 2048;

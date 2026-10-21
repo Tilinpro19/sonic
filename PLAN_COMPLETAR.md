@@ -1,6 +1,6 @@
 # Plan para completar Sonic R web
 
-Objetivo: carrera completa de 3 vueltas jugable en las 5 pistas con los 10 personajes, sin regresiones, desplegada como PWA en GitHub Pages.
+Objetivo: carrera completa de 3 vueltas jugable en las 5 pistas con los 10 personajes, sin regresiones, desplegada como PWA en GitHub Pages en modo **Full Navegador (Zero-Install)** para que cualquier usuario entre al enlace y juegue directamente sin tener que seleccionar carpetas locales ni instalar nada.
 
 ## Estado verificado (21-10-2026)
 
@@ -24,6 +24,8 @@ Cada agente edita solo sus archivos. Si hace falta tocar otro, se avisa antes.
 ## Tareas de Claude (robustas, en orden)
 
 **C1. Validar salto y muelles contra la grabación.** Añadir a `original.test.ts` un test que compare los ticks con salto y con muelles de la grabación golden. Criterio: 0 desviaciones en esos ticks. Si falla, corregir `jump` y `springs`.
+- **Estado (21-10-2026):** salto validado (los 7 ticks con salto cuadran). La grabación **no contiene ningún muelle**, así que `springs` no se puede validar con ella (haría falta otra grabación). Al clasificar los 51 ticks fallidos, 36 resultaron ser el **ring dash** (no choques): portado en `ringDash()` (`0x47f1fc`, plataforma tipo 4 + ruta P6, detalle en A.11 del plan), conectado en `OriginalRunner` y con los anillos de la carrera ahora en `orig.rings` (que también dan la bonificación de vmax). Grabación: **1764/1777** ticks (antes 1726) y 433 seguidos en ejecución libre (antes 385); disparo bit a bit. Verificado en el navegador (Island, 60 → 10 anillos, sale con la velocidad grabada). 129 tests y `tsc` OK.
+- Los 13 fallos que quedan son todos en suelo (ticks 37, 251, 256, 548, 630, 734, 981, 1018–19, 1148, 1374, 1411, 1433): candidatos de C3 (choques con rivales) o paredes/rampas.
 
 **C2. Spin dash y habilidades.** Portar el spin dash y el switch de `0x485a85` en `original.ts`, y conectarlo a los eventos de `runner.ts`. Criterio: test de la mecánica (carga, liberación, velocidad resultante) y sin regresiones.
 
@@ -36,8 +38,13 @@ Cada agente edita solo sus archivos. Si hace falta tocar otro, se avisa antes.
 **C6. Geometría pendiente.** Arco de salto de Ruin (superficie 3D) y teletransportes de Emerald (localizar los objetos originales en lugar de deducirlos de la línea, `warps.ts`). Criterio: test por pista que compruebe que el corredor sigue la trayectoria esperada.
 
 **C7. Posición de salida y escala 1/8.** Verificar la salida de carrera (la intro de P1 termina en el origen) y dónde se aplica la escala 1/8. Criterio: el corredor sale de la parrilla en la posición del juego original.
+- **Estado (21-10-2026): hecho.** La parrilla es `0x47108c` (la llama la preparación de carrera `0x475848`): el corredor i sale en la lista **P4**`[[7,6,8,5,9][i]]` (P1 en P4[7]), con struct = (x≪12, −y≪12, z≪12) sobre P4 con z ya negada por el loader → `.ter` (x, −y, −z). Rumbo y capa de suelo (+a4) por pista en `0x4feb00`: Island 3072/0, City 3648/2, Factory 3072/0, Ruin 0/0, Emerald 2560/2; cabeceo, alabeo y velocidades a 0. Portado como `startSlot` en `original.ts` y usado en `main.ts` (salida y reinicio). La intro P1 es solo de cámara.
+- **Ids de pista corregidos**: el exe numera Factory = 3 y Ruin = 4 (switch de carga `0x47573f`); `tracks.ts` los tenía al revés, así que la música de Ruin/Factory estaba cruzada (`0x4fbed8`: 3→Track09, 4→Track08), el pad del ring dash (`RING_DASH_PAD`) y la condición «solo en capa 0» de `0x47f545` (que es de Factory) también estaban cruzados.
+- La parrilla no está en P0[0] salvo en Emerald (Island p243, City p35, Ruin p60, Factory p259), así que `Race` recibe la salida y rota la línea para que las vueltas cuenten desde ahí.
+- **Escala 1/8**: no se aplica a las coordenadas de salida (P4 está en unidades de pista, solo ≪12 a 20.12). Sigue siendo solo de las mallas de personaje al dibujar (`CHAR_SCALE`); el `>>3` exacto del renderer sigue sin localizar.
+- Test: `src/engine/start.test.ts` (5 pistas × 5 huecos: en el suelo, junto a la línea y mirando a lo largo de ella).
 
-**C8. Retirar el `Runner` aproximado.** Cuando C1–C7 pasen, usar solo `OriginalRunner`. Criterio: tests verdes y ningún import del `Runner` antiguo en el juego.
+**C8. Retirar el `Runner` aproximado.** Cuando C1–C7 pasen, usar solo `OriginalRunner`. Criterio: tests verdes y ningún import del `Runner` antiguo en el juego. **Hecho (2026-10-21):** clase `Runner` eliminada de `runner.ts`; `main.ts`, `ai.ts` (`createBot` sin `useOriginal`), `race.ts`, `warps.ts` y los tests usan solo `OriginalRunner`. Se quitaron los tests de habilidades con colisión simulada que solo validaban el modelo aproximado.
 
 **C9. Prueba de extremo a extremo.** Carrera completa de 3 vueltas en las 5 pistas, con piloto automático, en el navegador. Criterio: las 5 terminan sin errores en consola.
 

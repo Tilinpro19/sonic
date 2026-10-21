@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LAPS, Race, mainLoop } from './race';
-import type { Runner } from './runner';
+import type { OriginalRunner } from './runner';
 
 type V3 = [number, number, number];
 // Synthetic race line: a circle of radius 5000 (raw file coords, Y up), closed back onto P0[0],
@@ -8,7 +8,7 @@ type V3 = [number, number, number];
 const N = 200;
 const circle = (i: number): V3 => [Math.cos((i / N) * 2 * Math.PI) * 5000, 100, Math.sin((i / N) * 2 * Math.PI) * 5000];
 const p0: V3[] = [...Array.from({ length: N + 1 }, (_, i) => circle(i % N)), [90000, 0, 90000], [91000, 0, 90000]];
-const at = (i: number) => { const [x, y, z] = circle(((i % N) + N) % N); return { x, y: -y + 100, z: -z } as Runner; };
+const at = (i: number) => { const [x, y, z] = circle(((i % N) + N) % N); return { x, y: -y + 100, z: -z } as OriginalRunner; };
 
 describe('race rules', () => {
   it('main loop stops at the first return to the start', () => {

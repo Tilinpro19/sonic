@@ -7,7 +7,7 @@ import { TRACKS } from '../formats/tracks';
 import { Collision } from './collision';
 import { Race } from './race';
 import { loopsOf } from './loops';
-import { Runner } from './runner';
+import { OriginalRunner } from './runner';
 
 const GAME = resolve(process.env.SONICR_DIR ?? '../work/sonicr/app');
 
@@ -31,7 +31,7 @@ describe.skipIf(!existsSync(GAME))('loops and tubes on the real tracks', () => {
   for (const [key, from, past] of [['island', 214, 236], ['ruin', 238, 310]] as const)
     it(`${key}: Sonic at full speed is carried through and comes out on the floor past p${past}`, () => {
       const { col, loop } = load(key);
-      const r = new Runner(col, 0);
+      const r = new OriginalRunner(col, 0);
       const p = loop[from], q = loop[from + 1];
       const yaw = ((Math.atan2(q[0] - p[0], q[2] - p[2]) * 2048) / Math.PI + 4096) % 4096;
       r.spawn(p[0], p[1], p[2], yaw);

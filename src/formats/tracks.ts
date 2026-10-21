@@ -4,6 +4,7 @@
  * Snow variants (`*\snow\*_s_NN.raw`) are not listed yet.
  */
 export interface TrackInfo {
+  /** The exe's stage id [0x8fb8ec] (loader switch 0x47573f): Factory is 3 and Ruin 4. */
   id: number;
   key: string;
   name: string;
@@ -40,7 +41,7 @@ export const TRACKS: TrackInfo[] = [
     ],
   },
   {
-    id: 3, key: 'ruin', name: 'Regal Ruin', bin: 'ruin/ruin_d.bin', ter: 'bin/extras/ruin.ter',
+    id: 4, key: 'ruin', name: 'Regal Ruin', bin: 'ruin/ruin_d.bin', ter: 'bin/extras/ruin.ter',
     sky: 'ruin/parallax/_r.raw',
     playfield: { ply: 'ruin/ruin.ply', map: 'ruin/ruin.map', bounds: { x0: -450.81, z0: 424.09, x1: 445.75, z1: -472.47, s: 25 } },
     pages: [
@@ -50,7 +51,7 @@ export const TRACKS: TrackInfo[] = [
     ],
   },
   {
-    id: 4, key: 'factory', name: 'Reactive Factory', bin: 'factory/factry_e.bin', ter: 'bin/extras/factory.ter',
+    id: 3, key: 'factory', name: 'Reactive Factory', bin: 'factory/factry_e.bin', ter: 'bin/extras/factory.ter',
     sky: 'factory/parallax/_f.raw',
     playfield: { ply: 'factory/factory.ply', map: 'factory/factory.map', bounds: { x0: -366.75, z0: 279.84, x1: 192.39, z1: -279.3, s: 30 } },
     pages: [

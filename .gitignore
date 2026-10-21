@@ -19,3 +19,7 @@ dist/game/
 .idea/
 *.swp
 *.swo
+
+# Probes / scratch outputs
+*.out
+src/engine/_*.test.ts

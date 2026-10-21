@@ -18,14 +18,15 @@ import { buildCharacter, type Character } from './engine/character';
 import { WORLD_SCALE } from './engine/trackScene';
 import { parseTerrain } from './formats/terrain';
 import { Collision, segmentHit } from './engine/collision';
-import { Runner, OriginalRunner, TICK } from './engine/runner';
+import { ringDashFor, startSlot } from './engine/original';
+import { OriginalRunner, TICK } from './engine/runner';
 import { FixedStep } from './engine/clock';
 import { readInput, setDriving, registerTouchInput } from './engine/input';
 import { createTouchControls, isTouchDevice } from './engine/touch';
 import { Race } from './engine/race';
 import { showHud, updateHud, ringFlash } from './hud';
 import { GameAudio, stageTrack, PRE_RACE, WON, type MusicMode } from './engine/audio';
-import { calculateGridSlot, createBot, updateBotInput, calculateStandings, type BotState, type StandingEntry } from './engine/ai';
+import { createBot, updateBotInput, calculateStandings, type BotState, type StandingEntry } from './engine/ai';
 import { applyWarp } from './engine/warps';
 import { loopsOf } from './engine/loops';
 import { ParticleManager } from './engine/particles';
@@ -130,6 +131,8 @@ interface Loaded {
    * `.ter` (x, −y, −z); sits ~80–190 units above the floor on all five tracks.
    */
   raceLine: [number, number, number][];
+  /** Track list P4, raw file coords: the start grid (startSlot). */
+  grid: [number, number, number][];
   /** Ring positions, loader space. */
   ringPos: [number, number, number][];
 }
@@ -213,10 +216,12 @@ async function loadTrack(info: TrackInfo) {
     if (lights) objects.push(...lights.objects);
     scene.add(...objects);
     scene.environment = env.texture;
+    const col = new Collision(parseTerrain(ter), info.playfield ? 0 : null, info.id);
+    if (col.origTerrain) col.origTerrain.ringDash = ringDashFor(info.id, track.meshes, track.p6);
     current = {
       info, objects, rings: rings.mesh, tour, sun: lights?.sun ?? null, fog,
       update: (t) => { rings.update(t, drive ? (i) => drive!.race.ringAge(i) : undefined); built.update(t); },
-      tris: built.stats.triangles, drawCalls: built.stats.drawCalls, col: new Collision(parseTerrain(ter), info.playfield ? 0 : null), raceLine: track.lists.P0, ringPos: track.rings.map((r) => r.pos),
+      tris: built.stats.triangles, drawCalls: built.stats.drawCalls, col, raceLine: track.lists.P0, grid: track.lists.P4, ringPos: track.rings.map((r) => r.pos),
       disposables: [
         ...pages, sky.texture, env, ...(pf?.disposables ?? []), rings.mesh.geometry, rings.mesh.material as THREE.Material,
         ...built.materials, ...built.textures, ...built.group.children.map((c) => (c as THREE.Mesh).geometry),
@@ -368,7 +373,7 @@ interface RivalRacer {
 }
 
 let drive: {
-  runner: Runner | OriginalRunner;
+  runner: OriginalRunner;
   race: Race;
   rivals: RivalRacer[];
   standings: StandingEntry[];
@@ -414,15 +419,12 @@ async function startDrive() {
   if (!racer || !current) return;
   stopDrive();
 
-  const runner = current.col.origTerrain
-    ? new OriginalRunner(current.col, CHARACTERS.indexOf(racer.info))
-    : new Runner(current.col, CHARACTERS.indexOf(racer.info));
-  const race = new Race(current.raceLine, current.ringPos);
+  const runner = new OriginalRunner(current.col, CHARACTERS.indexOf(racer.info));
+  // P1 takes grid slot 0 (P4[7]), the rivals the slots around it (0x47108c).
+  const s0 = startSlot(current.grid, current.info.id, 0);
+  const race = new Race(current.raceLine, current.ringPos, s0);
   current.col.loops = loopsOf(race.loop, current.col);
-
-  // Position Player at grid slot 0
-  const s0 = calculateGridSlot(race.loop, 0);
-  runner.spawn(s0.x, s0.y, s0.z, s0.yaw);
+  runner.spawn(s0.x, s0.y, s0.z, s0.yaw, s0.pri);
 
   const rivals: RivalRacer[] = [];
   if (ui.rivals.checked) {
@@ -442,10 +444,10 @@ async function startDrive() {
       const cfg = configs[i] ?? { lane: 0, skill: 0.92 };
       const { ch, idleAnim } = await loadRivalCharacter(info, quality);
       const charIndex = CHARACTERS.indexOf(info);
-      const bot = createBot(current.col, charIndex, info.key, info.name, cfg.lane, cfg.skill, !!current.col.origTerrain);
+      const bot = createBot(current.col, charIndex, info.key, info.name, cfg.lane, cfg.skill);
 
-      const slot = calculateGridSlot(race.loop, i + 1);
-      bot.runner.spawn(slot.x, slot.y, slot.z, slot.yaw);
+      const slot = startSlot(current.grid, current.info.id, i + 1);
+      bot.runner.spawn(slot.x, slot.y, slot.z, slot.yaw, slot.pri);
 
       const pos = new THREE.Vector3();
       const dir = new THREE.Vector3();
@@ -549,6 +551,8 @@ function stepDrive(dt: number) {
       particles.emitDust(dPos, dDir);
     }
     const ev = race.tick(runner);
+    // The original keeps the count in the racer (+18): it raises vmax and pays for the ring dash.
+    runner.orig.rings += ev.rings; race.ringCount = runner.orig.rings;
     if (ev.rings) {
       ringFlash();
       audio.play('ring1', 0.8);
@@ -625,16 +629,16 @@ const IDLE = { accel: false, brake: false, steer: 0, jump: false };
 
 function restartRace() {
   if (!drive || !current) return;
-  const s0 = calculateGridSlot(drive.race.loop, 0);
-  drive.runner.spawn(s0.x, s0.y, s0.z, s0.yaw);
+  const s0 = startSlot(current.grid, current.info.id, 0);
+  drive.runner.spawn(s0.x, s0.y, s0.z, s0.yaw, s0.pri);
   drive.race.reset();
   drive.countdown = COUNTDOWN;
   drive.cam = null;
 
   for (let i = 0; i < drive.rivals.length; i++) {
     const r = drive.rivals[i];
-    const s = calculateGridSlot(drive.race.loop, i + 1);
-    r.bot.runner.spawn(s.x, s.y, s.z, s.yaw);
+    const s = startSlot(current.grid, current.info.id, i + 1);
+    r.bot.runner.spawn(s.x, s.y, s.z, s.yaw, s.pri);
     r.bot.lap = 1;
     r.bot.progress = 0;
     r.bot.quarter = 0;

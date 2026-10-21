@@ -19,8 +19,8 @@ export class Collision {
   loops: readonly Loop[] = [];
   readonly origTerrain?: OrigTerrain;
 
-  constructor(readonly t: Terrain, readonly baseY: number | null = null) {
-    if (t.raw) this.origTerrain = new OrigTerrain(t.raw);
+  constructor(readonly t: Terrain, readonly baseY: number | null = null, trackId = 1) {
+    if (t.raw) this.origTerrain = new OrigTerrain(t.raw, trackId);
   }
 
   /** Sector indices of the broadphase cell containing (x, z), or none outside the grid. */

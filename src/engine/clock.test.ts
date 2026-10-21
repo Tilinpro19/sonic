@@ -6,7 +6,7 @@ import { parseTerrain } from '../formats/terrain';
 import { TRACKS } from '../formats/tracks';
 import { Collision } from './collision';
 import { FixedStep } from './clock';
-import { Runner, type Input } from './runner';
+import { OriginalRunner, type Input } from './runner';
 
 const RATES = [30, 60, 144, 240];
 /** Frame deltas as rAF would give them: differences of whole-µs timestamps. */
@@ -45,7 +45,7 @@ describe.skipIf(!existsSync(GAME))('game speed is independent of the frame rate'
   const input = (t: number): Input => ({ accel: t % 200 < 170, brake: t % 200 >= 185, steer: Math.sin(t / 40) * 0.6, jump: t % 90 === 45 });
 
   const run = (hz: number) => {
-    const r = new Runner(col, 0);
+    const r = new OriginalRunner(col, 0);
     r.spawn(p0[0][0], -p0[0][1], -p0[0][2], 0);
     const c = new FixedStep();
     let t = 0;
