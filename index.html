@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sonic R Web</title>
+    <meta name="description" content="Remasterizado web de Sonic R que funciona con tu propia copia del juego." />
+    <meta name="theme-color" content="#13228a" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="./icons/favicon.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="start" class="overlay">
+      <div class="card">
+        <h1>Sonic R <span>Web</span></h1>
+        <p>Visor de pistas remasterizado. Los archivos del juego no vienen incluidos: elige la carpeta donde tienes instalado tu Sonic R (la que contiene <code>sonicr.exe</code>). Nada sale de tu ordenador.</p>
+        <label class="btn">Elegir carpeta de Sonic R
+          <input id="pick" type="file" webkitdirectory hidden />
+        </label>
+        <p id="start-msg" class="msg"></p>
+      </div>
+    </div>
+
+    <div id="menu" class="overlay menu" hidden>
+      <div class="card wide">
+        <h1>Sonic R <span>Web</span></h1>
+        <h2>Personaje</h2>
+        <div id="menu-chars" class="choices"></div>
+        <h2>Pista</h2>
+        <div id="menu-tracks" class="choices"></div>
+        <label class="row"><input id="menu-rivals" type="checkbox" checked /> Rivales CPU</label>
+        <div class="menu-actions">
+          <button id="menu-go">🏁 ¡A correr!</button>
+          <button id="menu-viewer" class="ghost">Visor libre</button>
+        </div>
+      </div>
+    </div>
+
+    <aside id="panel" class="no-char" hidden>
+      <header>Sonic R <span>Web</span> · Remaster</header>
+      <label>Pista
+        <select id="track"></select>
+      </label>
+      <label>Gráficos
+        <select id="quality">
+          <option value="remaster">Remaster (luz, sombras, agua, curvas)</option>
+          <option value="hd">HD (solo texturas y suavizado)</option>
+          <option value="original">Original 1998</option>
+        </select>
+      </label>
+      <label>Resolución interna
+        <select id="res">
+          <option value="1">Nativa</option>
+          <option value="1.5">×1.5 (supersampling)</option>
+          <option value="2">×2 (supersampling)</option>
+        </select>
+      </label>
+      <label class="row"><input id="bloom" type="checkbox" checked /> Bloom</label>
+      <label class="row remaster-only"><input id="shadows" type="checkbox" checked /> Sombras</label>
+      <label class="row remaster-only"><input id="fog" type="checkbox" checked /> Profundidad atmosférica</label>
+      <label class="row"><input id="rings" type="checkbox" checked /> Anillos</label>
+      <label class="row"><input id="rivals" type="checkbox" checked /> Rivales CPU (carrera)</label>
+      <label>Música
+        <select id="music">
+          <option value="vocal">Con voz (original)</option>
+          <option value="instrumental">Instrumental</option>
+          <option value="off">Sin música</option>
+        </select>
+      </label>
+      <label class="row"><input id="sfx" type="checkbox" checked /> Efectos de sonido</label>
+      <label>Personaje
+        <select id="char"><option value="">— Ninguno —</option></select>
+      </label>
+      <label class="char-only">Animación
+        <select id="anim"></select>
+      </label>
+      <button id="look" class="char-only">🎥 Ver personaje</button>
+      <button id="drive" class="char-only">🏁 Correr</button>
+      <button id="to-menu">☰ Menú de carrera</button>
+      <button id="tour">▶ Recorrido de introducción</button>
+      <p id="copy-status" class="msg"></p>
+      <button id="forget" hidden>🗑 Olvidar la copia guardada</button>
+      <div id="stats"></div>
+      <footer id="hint">Arrastrar: mirar · WASD/QE: mover · Shift: rápido · Rueda: velocidad · Mando compatible</footer>
+    </aside>
+
+    <div id="hud" hidden>
+      <div id="hud-rank" class="hud-rank pos-1"><b id="hud-pos">1</b><span id="hud-pos-suffix">º</span></div>
+      <div class="hud-tl"><span class="ring-icon"></span><b id="hud-rings">0</b></div>
+      <div class="hud-tr">
+        <div class="hud-label">VUELTA <b id="hud-lap">1/3</b></div>
+        <div id="hud-time">0'00"00</div>
+        <ol id="hud-laps"></ol>
+      </div>
+      <div id="hud-speed" class="hud-br">0 km/h</div>
+      <div id="hud-center"></div>
+      <button id="hud-menu" title="Salir (Esc / Start)">☰</button>
+      <div class="hud-hint">↑ acelerar · ←→ girar · Espacio saltar · R repetir · Esc salir</div>
+    </div>
+
+    <div id="loading" class="overlay" hidden><div class="spinner"></div><p id="loading-msg">Cargando…</p></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
