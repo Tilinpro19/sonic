@@ -1,7 +1,7 @@
 /**
  * Driving input, sampled once per 30 Hz tick.
- * Keyboard: ↑/W accelerate, ↓/S brake, ←→/AD steer, Space jump.
- * Gamepad (standard mapping): left stick steer, A or RT accelerate, LT brake, B/X jump.
+ * Keyboard: ↑/W accelerate, ↓/S brake, ←→/AD steer, Space jump, Shift/E spin dash (accelerate revs).
+ * Gamepad (standard mapping): left stick steer, A or RT accelerate, LT brake, B/X jump, LB/RB spin dash.
  */
 import type { Input } from './runner';
 
@@ -29,6 +29,7 @@ export function readInput(): Input {
   const k = (...c: string[]) => c.some((x) => keys.has(x) || tapped.has(x));
   let steer = (k('ArrowRight', 'KeyD') ? 1 : 0) - (k('ArrowLeft', 'KeyA') ? 1 : 0);
   let accel = k('ArrowUp', 'KeyW'), brake = k('ArrowDown', 'KeyS'), jump = k('Space');
+  let spin = k('ShiftLeft', 'ShiftRight', 'KeyE');
   const pad = navigator.getGamepads?.().find((p) => p);
   tapped.clear();
   if (pad) {
@@ -38,6 +39,7 @@ export function readInput(): Input {
     accel ||= b(0) || b(7) || (pad.axes[1] ?? 0) < -0.5;
     brake ||= b(6) || (pad.axes[1] ?? 0) > 0.5;
     jump ||= b(1) || b(2);
+    spin ||= b(4) || b(5);
   }
   if (touchSampler) {
     const t = touchSampler();
@@ -45,6 +47,7 @@ export function readInput(): Input {
     accel ||= t.accel;
     brake ||= t.brake;
     jump ||= t.jump;
+    spin ||= !!t.spin;
   }
-  return { accel, brake, steer: Math.max(-1, Math.min(1, steer)), jump };
+  return { accel, brake, steer: Math.max(-1, Math.min(1, steer)), jump, spin };
 }

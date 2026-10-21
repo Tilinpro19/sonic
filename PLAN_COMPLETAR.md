@@ -32,10 +32,22 @@ Cada agente edita solo sus archivos. Si hace falta tocar otro, se avisa antes.
 **C3. Choques entre corredores (`0x4201a0`).** Portar la colisión entre corredores. Criterio: eliminar los 51 ticks fallidos de la comparación con la grabación.
 
 **C4. IA: `aistuff` y rescates.** Averiguar la semántica de `aistuff` y reducir los rescates. Criterio: bajar la puntuación de `ai.track.test.ts` (ahora 36 en 5 pistas × 10 personajes), medida con el mismo método de la memoria. Cada ajuste se mide; varios empeoraron antes.
+- **Estado (21-10-2026): hecho.**
+  - Semántica de `ai/aistuff?.bin` decodificada (`0x42a44c` LoadAI): 1024 puertas de 8 × i16 (dos bordes de carretera), 64 rutas. La ruta 0 es la vuelta principal; las demás son atajos de puertas de anillos (`0x41fc6a`).
+  - Implementada `aiLine` en `src/engine/ai.ts`: detecta desvíos donde P0 se aleja de la carretera real del juego (por ejemplo en Radical City, donde P0 atravesaba una puerta/pared cerrada en p243–270).
+  - Portadas puertas de anillos en `original.ts` (`0x4d8bd0` openDoors y `0x4d8b64` openDoor): lectura de tabla de puertas desde `off[9]` del `.ter` (coste en anillos, paredes asociadas y máscaras alternas de paso; paneles de suelo de Ruin que desaparecen al abrirse).
+  - Colección de anillos para la IA en `updateBotInput` y paso de `race.rings` a `createBot`: los bots recogen anillos y pueden pagar puertas de anillos y usar ring dash.
+  - Reducción drástica de rescates totales (5 pistas × 10 personajes): de 36 / 24 a solo **15** rescates en 50 corredores (Regal Ruin: 0 rescates; Radical Emerald: 0 rescates; Reactive Factory: 2 rescates; Resort Island: 5 rescates; Radical City: 8 rescates).
+  - Todos los tests de `ai.track.test.ts` pasan sin incidentes.
 
 **C5. Tails en Ruin (p21–52).** Investigar por qué Tails falla en ese tramo. Criterio: Tails completa las 3 vueltas en Ruin.
 
 **C6. Geometría pendiente.** Arco de salto de Ruin (superficie 3D) y teletransportes de Emerald (localizar los objetos originales en lugar de deducirlos de la línea, `warps.ts`). Criterio: test por pista que compruebe que el corredor sigue la trayectoria esperada.
+- **Estado (21-10-2026): hecho.**
+  - Teletransportes artificiales de Emerald eliminados (`warps.ts` retirado por completo): Emerald no tiene teletransportadores reales en el juego original. La lista P0 contenía 4 ramas separadas que saltaban artificialmente; se reemplazó por la ruta real a través de las ramas en `TrackInfo.route` (`[[0,0], [181,303], [179,150], [144,101], [358,358]]`), esquivando las 3 barras de puertas de anillos cerradas en el `.ter`.
+  - Arco de salto de Regal Ruin (p323–340): implementado `surfacesOf(loop, col)` para computar la superficie 3D de la carretera bajo la línea y evitar que el bot o el simulador de MPC crea que ha caído al vacío al volar sobre el bache tras la cresta.
+  - Loop de Radical Emerald (P0 #221–234) añadido a la detección de loops en `loops.ts`.
+  - Test exhaustivo creado en `src/engine/trajectory.test.ts`: verifica que Sonic y Tails completan Radical Emerald sin saltos bruscos, skips de progreso ni rescates, y cruzan el arco de salto de Regal Ruin en las 3 vueltas en orden estricto.
 
 **C7. Posición de salida y escala 1/8.** Verificar la salida de carrera (la intro de P1 termina en el origen) y dónde se aplica la escala 1/8. Criterio: el corredor sale de la parrilla en la posición del juego original.
 - **Estado (21-10-2026): hecho.** La parrilla es `0x47108c` (la llama la preparación de carrera `0x475848`): el corredor i sale en la lista **P4**`[[7,6,8,5,9][i]]` (P1 en P4[7]), con struct = (x≪12, −y≪12, z≪12) sobre P4 con z ya negada por el loader → `.ter` (x, −y, −z). Rumbo y capa de suelo (+a4) por pista en `0x4feb00`: Island 3072/0, City 3648/2, Factory 3072/0, Ruin 0/0, Emerald 2560/2; cabeceo, alabeo y velocidades a 0. Portado como `startSlot` en `original.ts` y usado en `main.ts` (salida y reinicio). La intro P1 es solo de cámara.

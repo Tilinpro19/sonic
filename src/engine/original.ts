@@ -419,11 +419,41 @@ export class OrigTerrain {
   readonly x0: number; readonly z0: number; readonly cx: number; readonly cz: number;
   playfieldWater?: PlayfieldWater;
   ringDash?: RingDash;
+  /** Ring doors (0x6da578 = off[9], count at header +0x48), as loaded; `doors()` has the live state. */
+  private readonly doorTable: readonly Door[];
+  private doorState: Door[] = [];
+  /** Live wall masks of opened doors (0x4d8b64 swaps them into the wall table). */
+  private masks = new Map<number, number>();
+  /** While set, racers do not open doors (the AI's look-ahead simulation shares this terrain). */
+  doorsFrozen = false;
   constructor(buf: ArrayBuffer | Uint8Array, readonly track = 1) {
     const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     this.v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     this.off = Array.from({ length: 10 }, (_, i) => this.v.getUint32(i * 4, true));
     [this.x0, this.z0, this.cx, this.cz] = [9, 10, 11, 12].map((i) => this.v.getInt32(40 + i * 4, true));
+    const n = this.v.getInt32(0x48, true);
+    this.doorTable = Array.from({ length: n }, (_, i) => {
+      const a = this.off[9] + i * 12;
+      return { a: this.h(a), b: this.h(a + 2), altA: this.v.getUint16(a + 4, true), altB: this.v.getUint16(a + 6, true), closed: this.h(a + 8), cost: this.h(a + 10) };
+    });
+    this.resetDoors();
+  }
+  /** Closes every door again (race start). */
+  resetDoors() {
+    this.doorState = this.doorTable.map((d) => ({ ...d }));
+    this.masks.clear();
+  }
+  doors(): readonly Door[] { return this.doorState; }
+  /** 0x4d8b64: opens door `i`, swapping the walls' masks with the door's alternates. */
+  openDoor(i: number) {
+    const d = this.doorState[i];
+    d.closed = 0;
+    for (const [w, k] of [[d.a, 'altA'], [d.b, 'altB']] as const) {
+      if (w === -1) continue;
+      const m = this.wall(w).mask;
+      this.masks.set(w, d[k]);
+      d[k] = m;
+    }
   }
   h(a: number) { return this.v.getInt16(a, true); }
   private vert(o: number): [number, number, number] { const a = this.off[0] + o; return [this.h(a), this.h(a + 2), this.h(a + 4)]; }
@@ -436,7 +466,7 @@ export class OrigTerrain {
 
   wall(i: number) {
     const a = this.off[3] + i * 16, b = (k: number) => this.v.getUint8(a + k);
-    return { first: this.h(a), n: b(2), kind: b(3), brk: b(4), chk: b(5), mask: this.v.getUint16(a + 6, true), cx: this.h(a + 8), cz: this.h(a + 10), r2: this.v.getInt32(a + 12, true) };
+    return { first: this.h(a), n: b(2), kind: b(3), brk: b(4), chk: b(5), mask: this.masks.get(i) ?? this.v.getUint16(a + 6, true), cx: this.h(a + 8), cz: this.h(a + 10), r2: this.v.getInt32(a + 12, true) };
   }
   wallPoint(k: number): [number, number, number] { const a = this.off[4] + k * 6; return [this.h(a), this.h(a + 2), this.h(a + 4)]; }
   /** Grid cell list (off[7] → off[8]) for a 20.12 position: entries until one with bit 15. */
@@ -451,6 +481,9 @@ export class OrigTerrain {
   }
 }
 
+/** A ring door: walls A/B (B = −1: none), their masks once open, closed flag (+8) and ring cost (+0a). */
+export interface Door { a: number; b: number; altA: number; altB: number; closed: number; cost: number }
+
 type V3 = [number, number, number];
 /** Which side of A→B the point (px, pz) lies on, in 20.12 with A, B in mesh units (64-bit sign). */
 function side(px: number, pz: number, A: V3, B: V3) {
@@ -461,7 +494,7 @@ const side2 = (P: [number, number], A: [number, number], B: [number, number]) =>
   (BigInt(P[0]) - BigInt(A[0])) * (BigInt(B[1]) - BigInt(A[1])) - (BigInt(P[1]) - BigInt(A[1])) * (BigInt(B[0]) - BigInt(A[0])) >= 0n;
 
 /** 0x4d67d8: which quad of sector `si` contains (x, z) — binary search along the ribbon. */
-function inQuad(t: OrigTerrain, x: number, z: number, si: number) {
+export function inQuad(t: OrigTerrain, x: number, z: number, si: number) {
   const sec = t.sector(si), f = sec.first, n = sec.n;
   const q0 = t.quadVerts(f);
   if (!side(x, z, q0[0], q0[1])) return -1;
@@ -477,7 +510,7 @@ function inQuad(t: OrigTerrain, x: number, z: number, si: number) {
 }
 
 /** 0x4d6c1c: floor height (20.12) of quad `qi` of sector `si` at (x, z). */
-function height(t: OrigTerrain, x: number, z: number, si: number, qi: number) {
+export function height(t: OrigTerrain, x: number, z: number, si: number, qi: number) {
   const V = t.quadVerts(t.sector(si).first + qi), X = x >> 12, Z = z >> 12;
   let a = V[0], b = V[2], c = V[3];
   if (!side(x, z, V[0], V[2])) { b = V[1]; c = V[2]; }
@@ -512,9 +545,15 @@ function findFloor(t: OrigTerrain, r: OrigRacer) {
   m = (t.cz * 32 + t.z0 - 1) << 12;
   if (m < r.z) { r.vz = 0; r.z = m; }
   const X = r.x >> 12, Z = r.z >> 12;
+  const doors = t.doors();
   for (const e of t.cell(r.x, r.z)) {
     if (e & 0x4000) continue;
     const si = e & 0xfff, sec = t.sector(si);
+    // Ruin: floor panels that go away once its doors are open.
+    if (t.track === 4 && doors.length >= 2) {
+      if (!doors[0].closed && si > 0x188 && si < 0x18e) continue;
+      if (!doors[1].closed && (si === 0x3f || si === 0x103 || (si > 0x12e && si < 0x132))) continue;
+    }
     if ((X - sec.cx) ** 2 + (Z - sec.cz) ** 2 >= sec.r2) continue;
     const qi = inQuad(t, r.x, r.z, si);
     if (qi < 0) continue;
@@ -636,8 +675,33 @@ function camber(r: OrigRacer) {
   r.camber = ((((atan12(A, -Ny) + 0x10) * e * e) >> 15) << 16) >> 16;
 }
 
-/** 0x4d8ab8, normal path: walls, floor, normal, slope, snap, camber. */
+/**
+ * 0x4d8bd0: a racer near a closed door, on a layer its wall blocks and with enough rings, opens it
+ * (for everyone, for the rest of the race) and pays the rings.
+ */
+export function openDoors(t: OrigTerrain, r: OrigRacer) {
+  if (t.doorsFrozen) return;
+  const bit = (1 << (r.pri & 0xff)) & 0xffff, X = r.x >> 12, Z = r.z >> 12;
+  const doors = t.doors();
+  for (let i = 0; i < doors.length; i++) {
+    const d = doors[i];
+    if (d.closed !== 1 || d.cost > r.rings) continue;
+    const near = (wi: number) => {
+      if (wi === -1) return false;
+      const w = t.wall(wi);
+      return (w.mask & bit) !== 0 && (X - w.cx) ** 2 + (Z - w.cz) ** 2 < w.r2;
+    };
+    if (near(d.a) || near(d.b)) {
+      t.openDoor(i);
+      r.rings -= d.cost;
+      return;
+    }
+  }
+}
+
+/** 0x4d8ab8, normal path: doors, walls, floor, normal, slope, snap, camber. */
 export function collide(t: OrigTerrain, r: OrigRacer) {
+  openDoors(t, r);
   hitWalls(t, r);
   findFloor(t, r);
   updateNormal(t, r);

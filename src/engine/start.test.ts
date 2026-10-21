@@ -26,7 +26,7 @@ describe('start grid (0x47108c)', () => {
     const track = parseTrack(readFileSync(join(GAME, t.bin)));
     const col = new Collision(parseTerrain(readFileSync(join(GAME, t.ter))), t.playfield ? 0 : null, t.id);
     const s0 = startSlot(track.lists.P4, t.id, 0);
-    const loop = new Race(track.lists.P0, [], s0).loop;
+    const loop = new Race(track.lists.P0, [], s0, t.route).loop;
     for (let slot = 0; slot < 5; slot++) {
       const s = startSlot(track.lists.P4, t.id, slot);
       const r = new OriginalRunner(col, 0);
@@ -34,10 +34,11 @@ describe('start grid (0x47108c)', () => {
       expect(r.grounded).toBe(true);
       expect(Math.abs(r.y - s.y)).toBeLessThan(16);
       expect(r.orig.pri).toBe(s.pri);
-      // Nearest race-line point: within 500 units, and the heading runs along the line there.
+      // Nearest race-line point (in 3D: Emerald's route passes under its start): within 500 units
+      // across, and the heading runs along the line there.
       let i = 0, best = Infinity;
-      loop.forEach(([x, , z], k) => { const d = Math.hypot(x - s.x, z - s.z); if (d < best) { best = d; i = k; } });
-      expect(best).toBeLessThan(500);
+      loop.forEach(([x, y, z], k) => { const d = Math.hypot(x - s.x, y - s.y, z - s.z); if (d < best) { best = d; i = k; } });
+      expect(Math.hypot(loop[i][0] - s.x, loop[i][2] - s.z)).toBeLessThan(500);
       const a = loop[i], b = loop[(i + 2) % loop.length];
       const tx = b[0] - a[0], tz = b[2] - a[2];
       const cos = (sinLut[s.yaw] * tx + sinLut[s.yaw + 1024] * tz) / 16384 / Math.hypot(tx, tz);

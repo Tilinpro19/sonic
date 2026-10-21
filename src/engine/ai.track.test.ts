@@ -8,7 +8,7 @@ import { Collision } from './collision';
 import { loopsOf } from './loops';
 import { OriginalRunner } from './runner';
 import { LAPS, Race } from './race';
-import { calculateGridSlot, createBot, updateBotInput } from './ai';
+import { calculateGridSlot, createBot, updateBotInput, aiLine } from './ai';
 import { startSlot } from './original';
 
 const GAME = resolve(process.env.SONICR_DIR ?? '../work/sonicr/app');
@@ -17,10 +17,16 @@ describe.skipIf(!existsSync(GAME))('CPU rivals on the real tracks', () => {
   for (const t of TRACKS)
     it(`${t.name}: rivals from all grid slots finish ${LAPS} laps`, () => {
       const track = parseTrack(readFileSync(join(GAME, t.bin)));
-      const col = new Collision(parseTerrain(readFileSync(join(GAME, t.ter))), t.playfield ? 0 : null);
-      const loop = new Race(track.lists.P0, [], startSlot(track.lists.P4, t.id, 0)).loop;
+      const col = new Collision(parseTerrain(readFileSync(join(GAME, t.ter))), t.playfield ? 0 : null, t.id);
+      const s0 = startSlot(track.lists.P4, t.id, 0);
+      const race = new Race(track.lists.P0, track.rings.map((r) => r.pos), s0, t.route);
+      let loop = race.loop;
+      if (t.ai) {
+        loop = aiLine(readFileSync(join(GAME, t.ai)), col, loop, s0);
+      }
+      col.loops = loopsOf(loop, col);
       const bots = [1, 2, 3].map((slot) => {
-        const b = createBot(col, slot - 1, `b${slot}`, `b${slot}`, slot === 1 ? -20 : slot === 2 ? 20 : 0);
+        const b = createBot(col, slot - 1, `b${slot}`, `b${slot}`, slot === 1 ? -20 : slot === 2 ? 20 : 0, 0.95, race.rings);
         const s = startSlot(track.lists.P4, t.id, slot);
         b.runner.spawn(s.x, s.y, s.z, s.yaw, s.pri);
         return b;

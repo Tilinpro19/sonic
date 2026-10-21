@@ -13,8 +13,8 @@
  */
 import { OriginalRunner, type Input } from './runner';
 import type { Collision } from './collision';
-import { applyWarp } from './warps';
 import { loopsOf } from './loops';
+import { BODY, PICKUP } from './race';
 
 export type V3 = [number, number, number];
 
@@ -46,6 +46,9 @@ export interface BotState {
   fallen: number;
   /** Rescues in a row at about the same spot (each one drops the bot further ahead). */
   rescues: number;
+  /** The race's rings (.ter space) and which of them this bot has taken. */
+  rings: readonly V3[];
+  taken: Uint8Array;
 }
 
 /**
@@ -53,6 +56,74 @@ export interface BotState {
  * original grid from track list P4: `startSlot` in original.ts.
  * Slot 0 is front-left (Player), Slot 1 front-right, Slot 2 second row left, etc.
  */
+
+/**
+ * The original AI's main route (`ai/aistuff?.bin`, LoadAI 0x42a44c), as a closed line in .ter space.
+ * The file is big-endian: 1024 gates of 8 × i16 {x1, −z1, x2, −z2, …} (two road edges across the
+ * track), then 64 routes {i32 count, i32 first gate}: route 0 is the lap, the others branches off it
+ * (ring-door shortcuts among them, taken by 0x41fc6a only when open or paid for). [P] P0 is not that
+ * route: it cuts through door walls and leaves the AI's road for km on Ruin, Factory and Emerald.
+ * Gates carry no height, so each midpoint gets the floor under it (near P0, the floor P0 runs over;
+ * elsewhere the one closest to the previous point's), 100 above it like P0. Starts nearest `start`.
+ */
+export function aiLine(ai: Uint8Array, col: Collision, p0: readonly V3[], start: { x: number; z: number }): V3[] {
+  const dv = new DataView(ai.buffer, ai.byteOffset, ai.byteLength);
+  const n = dv.getInt32(0x4000, false), first = dv.getInt32(0x4004, false);
+  const N = p0.length, FAR = +(process.env.C4_FAR ?? 300);
+  const gates = Array.from({ length: n }, (_, k) => {
+    const i = first + k, g = [0, 1, 2, 3].map((j) => dv.getInt16(i * 16 + j * 2, false));
+    const x = (g[0] + g[2]) / 2, z = -(g[1] + g[3]) / 2;
+    let near = 0, d = Infinity;
+    p0.forEach((p, j) => { const e = Math.hypot(p[0] - x, p[2] - z); if (e < d) { d = e; near = j; } });
+    return { x, z, near, far: d > FAR };
+  });
+  let line: V3[];
+  if (process.env.C4_MODE === 'route') {
+    let floor: number | null = null;
+    line = gates.map(({ x, z, near, far }) => {
+      const g0: ReturnType<Collision['ground']> = !far ? col.ground(x, z, p0[near][1] + 300, 300) : floor !== null ? col.ground(x, z, floor, 400) : col.ground(x, z, 0, 1e5);
+      if (g0) floor = g0.y;
+      return [x, (floor ?? p0[near][1] + 100) - 100, z] as V3;
+    });
+  } else {
+    // P0, with each stretch where the route leaves it (> FAR) replaced by the route's gates.
+    const detours = new Map<number, { to: number; pts: V3[] }>(), used = new Uint8Array(N);
+    for (let a = 0; a < n; a++) {
+      if (!gates[a].far || gates[(a + n - 1) % n].far) continue;
+      let b = a;
+      while (gates[(b + 1) % n].far && b - a < n) b++;
+      const from = gates[(a + n - 1) % n].near, to = gates[(b + 1) % n].near, span = (to - from + N) % N;
+      if (span === 0 || span > N / 2) continue;
+      let clash = false;
+      for (let k = 1; k < span; k++) clash ||= !!used[(from + k) % N];
+      if (clash || detours.has(from)) continue;
+      for (let k = 1; k < span; k++) used[(from + k) % N] = 1;
+      let floor = p0[from][1] + 100;
+      const pts: V3[] = [];
+      for (let k = a; k <= b; k++) {
+        const { x, z } = gates[k % n], g0 = col.ground(x, z, floor, 400);
+        if (g0) floor = g0.y;
+        pts.push([x, floor - 100, z]);
+      }
+      detours.set(from, { to, pts });
+    }
+    let i0 = 0;
+    while (used[i0]) i0++;
+    line = [];
+    for (let i = i0, steps = 0; steps < N; ) {
+      line.push(p0[i]);
+      const d = detours.get(i);
+      const next = d ? d.to : (i + 1) % N;
+      if (d) line.push(...d.pts);
+      steps += (next - i + N) % N || N;
+      i = next;
+    }
+  }
+  let s = 0, best = Infinity;
+  line.forEach((p, i) => { const d = Math.hypot(p[0] - start.x, p[2] - start.z); if (d < best) { best = d; s = i; } });
+  return [...line.slice(s), ...line.slice(0, s)];
+}
+
 export function calculateGridSlot(
   loop: readonly V3[],
   slotIndex: number,
@@ -100,6 +171,7 @@ export function createBot(
   name: string,
   laneOffset: number,
   skill = 0.95,
+  rings: readonly V3[] = [],
 ): BotState {
   return {
     name,
@@ -123,6 +195,8 @@ export function createBot(
     stall: 0,
     fallen: 0,
     rescues: 0,
+    rings,
+    taken: new Uint8Array(rings.length),
   };
 }
 
@@ -228,6 +302,20 @@ function padsOf(loop: readonly V3[], col: OriginalRunner['col']) {
   return p;
 }
 
+/**
+ * Per line point: the road height under it (the highest floor below, within 700), or the line
+ * plus 100 over a gap. The line usually runs ~100 above the road, but where the original AI jumps
+ * it is the jump's arc: Ruin p323–340 flies up to 500 over the dip behind the crest at p322.
+ */
+const SURFACES = new WeakMap<readonly V3[], number[]>();
+function surfacesOf(loop: readonly V3[], col: OriginalRunner['col']) {
+  let s = SURFACES.get(loop);
+  if (!s) {
+    s = loop.map((a) => { const g = col.ground(a[0], a[2], a[1], 0); return g && g.y - a[1] < 700 ? g.y : a[1] + 100; });
+    SURFACES.set(loop, s);
+  }
+  return s;
+}
 
 /** Off-road penalty per unit past the edge (rescues, 5 tracks × 10 racers: 30 at 0 → 24 at 3, +2% time). */
 const EDGE_WEIGHT = 3;
@@ -239,11 +327,13 @@ const EDGE_WEIGHT = 3;
 function choosePlan(bot: BotState, loop: readonly V3[]): number {
   const r = bot.runner, N = loop.length, arc = arcs(loop), total = arc[N];
   const sim = (bot.sim ??= new OriginalRunner(r.col, r.charIndex));
+  // The simulated racer shares the terrain: it must not open doors (or pay for them) for real.
+  if (r.ter) r.ter.doorsFrozen = true;
   const s0 = arc[bot.progress];
   let best = 0, bestScore = -Infinity, accelFatal = false;
   // A launch pad just ahead does the jumping: hopping now would sail over it (Factory p45).
   const pads = padsOf(loop, r.col);
-  const edges = edgesOf(loop, r.col);
+  const edges = edgesOf(loop, r.col), road = surfacesOf(loop, r.col);
   let padAhead = false;
   for (let o = 0; o <= 4 && !padAhead; o++) padAhead = pads[(bot.progress + o) % N];
   for (let k = 0; k < PLANS.length; k++) {
@@ -254,12 +344,10 @@ function choosePlan(bot: BotState, loop: readonly V3[]): number {
       near = nearestPoint(loop, sim, near, 2, 6);
       const p = PLANS[t < HOLD ? k : 0];
       sim.tick({ accel: p.accel, brake: p.brake, steer: pursue(bot, sim, loop, near).steer, jump: p.jump });
-      // After a teleport, measure against the line where it landed, not where it left.
-      if (applyWarp(sim, loop)) near = nearestPoint(loop, sim, near, 2, 6);
       const q = loop[near];
       const off = Math.hypot(sim.x - q[0], sim.z - q[2]);
-      // Y down: the line runs ~100 above the floor, so a runner 400 under it has fallen off.
-      const drop = sim.y - q[1] - 400;
+      // Y down: a runner 300 under the road has fallen off.
+      const drop = sim.y - road[near] - 300;
       worst = Math.max(worst, drop > 0 ? 1e4 + drop : 0, off - 260);
       // Past the road's edge (narrow roads with a drop, e.g. Ruin p215–236: 260 off the line is
       // already over it). Weighted by EDGE_WEIGHT, tuned like BANK.
@@ -276,6 +364,7 @@ function choosePlan(bot: BotState, loop: readonly V3[]): number {
   // Nearly stopped, coasting or braking always looks better (the simulated run-up accelerates
   // after the held part anyway, with less speed to run wide) — and re-planning would keep the
   // bot waiting forever (Ruin's spiral stairs). Go, unless going is fatal.
+  if (r.ter) r.ter.doorsFrozen = false;
   if ((best === 1 || best === 2) && r.speed < r.vmax * 0.35 && !accelFatal) best = 0;
   return best;
 }
@@ -317,8 +406,15 @@ export function updateBotInput(
   const { runner, skill } = bot;
   const N = loop.length;
   if (N < 2) return { accel: true, brake: false, steer: 0, jump: false };
-  applyWarp(runner, loop); // teleporters (the bot owns its runner; see warps.ts)
   runner.col.loops = loopsOf(loop, runner.col); // cached per line
+
+  // Rings: needed to open ring doors (and to ring dash); taken once per race, like the player's.
+  const cy = runner.y - BODY;
+  for (let i = 0; i < bot.rings.length; i++) {
+    if (bot.taken[i]) continue;
+    const p = bot.rings[i], dx = p[0] - runner.x, dy = p[1] - cy, dz = p[2] - runner.z;
+    if (dx * dx + dy * dy + dz * dz < PICKUP * PICKUP) { bot.taken[i] = 1; runner.orig.rings++; }
+  }
 
   // 1. Locate nearest waypoint along main loop
   const nearest = nearestPoint(loop, runner, bot.progress, 8, Math.min(30, Math.floor(N / 4)));
@@ -348,7 +444,7 @@ export function updateBotInput(
   // A loop ride always comes out the far side (its line folds back, so "progress" stalls).
   else if (runner.ride) bot.stall = 0;
   else bot.stall++;
-  bot.fallen = runner.y - loop[nearest][1] > 600 ? bot.fallen + 1 : 0;
+  bot.fallen = runner.y - surfacesOf(loop, runner.col)[nearest] > 500 ? bot.fallen + 1 : 0;
   if (bot.stall > 75 || bot.fallen > 8) {
     rescue(bot, loop);
     return { accel: true, brake: false, steer: 0, jump: false };

@@ -15,17 +15,18 @@ describe.skipIf(!existsSync(GAME))('loops and tubes on the real tracks', () => {
   const load = (key: string) => {
     const t = TRACKS.find((x) => x.key === key)!;
     const col = new Collision(parseTerrain(readFileSync(join(GAME, t.ter))), t.playfield ? 0 : null);
-    const loop = new Race(parseTrack(readFileSync(join(GAME, t.bin))).lists.P0, []).loop;
+    const loop = new Race(parseTrack(readFileSync(join(GAME, t.bin))).lists.P0, [], undefined, t.route).loop;
     col.loops = loopsOf(loop, col);
     return { col, loop };
   };
 
-  it('finds exactly Island\'s loop, Ruin\'s tube and Factory\'s loop (not springs or jump gaps)', () => {
+  // Emerald's is on its route (P0 #221–234); the descending spiral further on is driven, not ridden.
+  it('finds exactly the loops of Island, Factory and Emerald and Ruin\'s tube (not springs, jump gaps or spirals)', () => {
     const found = Object.fromEntries(TRACKS.map((t) => {
       const { col, loop } = load(t.key);
       return [t.key, col.loops.map((l) => [loop.indexOf(l.pts[0] as typeof loop[0]), loop.indexOf(l.pts[l.pts.length - 1] as typeof loop[0])])];
     }));
-    expect(found).toEqual({ island: [[220, 232]], city: [], ruin: [[244, 306]], factory: [[71, 83]], emerald: [] });
+    expect(found).toEqual({ island: [[220, 232]], city: [], ruin: [[244, 306]], factory: [[71, 83]], emerald: [[41, 54]] });
   });
 
   for (const [key, from, past] of [['island', 214, 236], ['ruin', 238, 310]] as const)

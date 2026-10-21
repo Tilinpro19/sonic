@@ -19,15 +19,14 @@ import { WORLD_SCALE } from './engine/trackScene';
 import { parseTerrain } from './formats/terrain';
 import { Collision, segmentHit } from './engine/collision';
 import { ringDashFor, startSlot } from './engine/original';
-import { OriginalRunner, TICK } from './engine/runner';
+import { OriginalRunner, TICK, collideRunners } from './engine/runner';
 import { FixedStep } from './engine/clock';
 import { readInput, setDriving, registerTouchInput } from './engine/input';
 import { createTouchControls, isTouchDevice } from './engine/touch';
 import { Race } from './engine/race';
 import { showHud, updateHud, ringFlash } from './hud';
 import { GameAudio, stageTrack, PRE_RACE, WON, type MusicMode } from './engine/audio';
-import { createBot, updateBotInput, calculateStandings, type BotState, type StandingEntry } from './engine/ai';
-import { applyWarp } from './engine/warps';
+import { aiLine, createBot, updateBotInput, calculateStandings, type BotState, type StandingEntry } from './engine/ai';
 import { loopsOf } from './engine/loops';
 import { ParticleManager } from './engine/particles';
 import { registerServiceWorker } from './pwa';
@@ -135,6 +134,7 @@ interface Loaded {
   grid: [number, number, number][];
   /** Ring positions, loader space. */
   ringPos: [number, number, number][];
+  aiBuf?: Uint8Array | null;
 }
 let current: Loaded | null = null;
 let quality: Quality = 'remaster';
@@ -160,7 +160,7 @@ async function loadTrack(info: TrackInfo) {
   loadingText(`Cargando ${info.name}…`);
   await new Promise((r) => setTimeout(r, 30)); // let the spinner paint (rAF stalls in hidden tabs)
   try {
-    const [bin, skyRaw, ter, ...pageRaw] = await Promise.all([getFile(info.bin), getFile(info.sky), getFile(info.ter), ...info.pages.map(getFile)]);
+    const [bin, skyRaw, ter, aiBuf, ...pageRaw] = await Promise.all([getFile(info.bin), getFile(info.sky), getFile(info.ter), info.ai ? getFile(info.ai).catch(() => null) : Promise.resolve(null), ...info.pages.map(getFile)]);
     const t0 = performance.now();
     const track = parseTrack(bin);
     // Texture upscaling (worker pool) and geometry tessellation (own worker) run in parallel.
@@ -221,7 +221,7 @@ async function loadTrack(info: TrackInfo) {
     current = {
       info, objects, rings: rings.mesh, tour, sun: lights?.sun ?? null, fog,
       update: (t) => { rings.update(t, drive ? (i) => drive!.race.ringAge(i) : undefined); built.update(t); },
-      tris: built.stats.triangles, drawCalls: built.stats.drawCalls, col, raceLine: track.lists.P0, grid: track.lists.P4, ringPos: track.rings.map((r) => r.pos),
+      tris: built.stats.triangles, drawCalls: built.stats.drawCalls, col, raceLine: track.lists.P0, grid: track.lists.P4, ringPos: track.rings.map((r) => r.pos), aiBuf: aiBuf ?? undefined,
       disposables: [
         ...pages, sky.texture, env, ...(pf?.disposables ?? []), rings.mesh.geometry, rings.mesh.material as THREE.Material,
         ...built.materials, ...built.textures, ...built.group.children.map((c) => (c as THREE.Mesh).geometry),
@@ -421,8 +421,15 @@ async function startDrive() {
 
   const runner = new OriginalRunner(current.col, CHARACTERS.indexOf(racer.info));
   // P1 takes grid slot 0 (P4[7]), the rivals the slots around it (0x47108c).
+  current.col.origTerrain?.resetDoors();
   const s0 = startSlot(current.grid, current.info.id, 0);
-  const race = new Race(current.raceLine, current.ringPos, s0);
+  let raceLine = current.raceLine;
+  if (current.aiBuf) {
+    const rawLoop = new Race(current.raceLine, [], s0, current.info.route).loop;
+    const detourLoop = aiLine(current.aiBuf, current.col, rawLoop, s0);
+    raceLine = detourLoop.map(([x, y, z]) => [x, -y, -z] as [number, number, number]);
+  }
+  const race = new Race(raceLine, current.ringPos, s0, current.info.route);
   current.col.loops = loopsOf(race.loop, current.col);
   runner.spawn(s0.x, s0.y, s0.z, s0.yaw, s0.pri);
 
@@ -444,7 +451,7 @@ async function startDrive() {
       const cfg = configs[i] ?? { lane: 0, skill: 0.92 };
       const { ch, idleAnim } = await loadRivalCharacter(info, quality);
       const charIndex = CHARACTERS.indexOf(info);
-      const bot = createBot(current.col, charIndex, info.key, info.name, cfg.lane, cfg.skill);
+      const bot = createBot(current.col, charIndex, info.key, info.name, cfg.lane, cfg.skill, race.rings);
 
       const slot = startSlot(current.grid, current.info.id, i + 1);
       bot.runner.spawn(slot.x, slot.y, slot.z, slot.yaw, slot.pri);
@@ -532,7 +539,6 @@ function stepDrive(dt: number) {
     }
     const inp = readInput();
     const tickRes = runner.tick(inp);
-    applyWarp(runner, race.loop);
     if (tickRes.ability === 'spring') {
       audio.play('spring');
       particles.emitRingSparkle(dPos, 20);
@@ -574,6 +580,9 @@ function stepDrive(dt: number) {
       const botInp = updateBotInput(r.bot, race.loop, race.time);
       r.bot.runner.tick(botInp);
     }
+    // Racer-vs-racer (0x4c9044), after everyone's physics: only vx/vz change, so this tick's pose
+    // and the chase camera are untouched; the push shows from the next tick, under the camera lag.
+    collideRunners([runner, ...rivals.map((r) => r.bot.runner)]);
 
     // Update real-time standings
     drive.standings = calculateStandings(

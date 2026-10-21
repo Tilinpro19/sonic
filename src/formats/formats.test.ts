@@ -6,8 +6,8 @@ import { parseModel, parseAnim } from './model';
 import { parseTerrain } from './terrain';
 import { TRACKS } from './tracks';
 import { CHARACTERS, CHARACTER_PAGES } from './characters';
-import { Race } from '../engine/race';
-import { warpsOf } from '../engine/warps';
+import { Race, mainLoop } from '../engine/race';
+import { OrigTerrain } from '../engine/original';
 
 // Golden counts from SONIC_R_REA_PLAN.md A.3.1 (validated with sr_track.py).
 const GAME = resolve(process.env.SONICR_DIR ?? '../work/sonicr/app');
@@ -103,12 +103,36 @@ describe.skipIf(!has)('collision .ter', () => {
   }
 });
 
-describe.skipIf(!has)('teleporters', () => {
-  it('only Radiant Emerald has them: p99→p100, p149→p150, p179→p0', () => {
+describe.skipIf(!has)('race loop (C6)', () => {
+  const loopOf = (tr: (typeof TRACKS)[number]) => new Race(parseTrack(readFileSync(join(GAME, tr.bin))).lists.P0, [], undefined, tr.route).loop;
+
+  // Emerald's P0[0..180) hops between branches (p99→p100, p149→p150, p179→p0); there are no
+  // teleporters, so its loop is the route through the branches.
+  it('has no step longer than 900 on any track', () => {
     for (const tr of TRACKS) {
-      const loop = new Race(parseTrack(readFileSync(join(GAME, tr.bin))).lists.P0, []).loop;
-      const w = warpsOf(loop).map((x) => loop.indexOf(x.from as never));
-      expect(w).toEqual(tr.key === 'emerald' ? [99, 149, 179] : []);
+      const loop = loopOf(tr);
+      const steps = loop.map((p, i) => { const q = loop[(i + 1) % loop.length]; return Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]); });
+      expect(Math.max(...steps), tr.key).toBeLessThan(900);
     }
+  });
+
+  it('Radical Emerald: the loop stays clear of the three ring-gate bars', () => {
+    const tr = TRACKS.find((t) => t.key === 'emerald')!;
+    const ter = new OrigTerrain(readFileSync(join(GAME, tr.ter)), tr.id), loop = loopOf(tr);
+    const cross = (a: number[], b: number[], c: number[], d: number[]) => {
+      const s = (p: number[], q: number[], r: number[]) => Math.sign((q[0] - p[0]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[0] - p[0]));
+      return s(a, b, c) * s(a, b, d) < 0 && s(c, d, a) * s(c, d, b) < 0;
+    };
+    // Closed 5-point rectangles across the road (the rest of the walls are road edges, some on other floor layers).
+    const bars = [105, 108, 111].map((i) => ter.wall(i));
+    for (const w of bars) expect(ter.wallPoint(w.first + 4)).toEqual(ter.wallPoint(w.first));
+    const hits = (line: number[][]) => line.flatMap((a, i) => {
+      const b = line[(i + 1) % line.length];
+      return bars.some((w) => [0, 1, 2, 3].some((j) => cross(a, b, ter.wallPoint(w.first + j), ter.wallPoint(w.first + j + 1)))) ? [i] : [];
+    });
+    expect(hits(loop)).toEqual([]);
+    // Following P0[0..k] runs into the gates at p32 and p96 (and its hops are not roads).
+    const naive = mainLoop(parseTrack(readFileSync(join(GAME, tr.bin))).lists.P0);
+    expect(hits(naive).filter((i) => ![99, 149, 179].includes(i))).toEqual([31, 95, 96]); // p96 is inside bar #105
   });
 });

@@ -13,11 +13,19 @@ import type { OriginalRunner } from './runner';
 type V3 = [number, number, number];
 
 export const LAPS = 3;
-const PICKUP = 95, BODY = 60;
+export const PICKUP = 95, BODY = 60;
 
-/** Main loop of the race line, in `.ter` space. */
-export function mainLoop(p0: readonly V3[]): V3[] {
+/**
+ * Main loop of the race line, in `.ter` space: P0[0..k], or the track's `route` (TrackInfo).
+ *
+ * Radical Emerald's P0[0..180) hops between branches (p99→p100, p149→p150, p179→p0: 2–5k
+ * against ~400). They are not teleporters: the original has no trigger object there (its 0x47f13c
+ * table only holds the ring dash pad and balloons) nor `.ter` trigger sector, and the floor at p99
+ * runs on into p265. Its loop is the `route` through the branches instead.
+ */
+export function mainLoop(p0: readonly V3[], route?: readonly (readonly [number, number])[]): V3[] {
   const L = p0.map(([x, y, z]) => [x, -y, -z] as V3);
+  if (route) return route.flatMap(([a, b]) => Array.from({ length: Math.abs(b - a) + 1 }, (_, k) => L[a + Math.sign(b - a) * k]));
   let end = L.length, best = Infinity;
   for (let i = 50; i < L.length; i++) {
     const d = Math.hypot(L[i][0] - L[0][0], L[i][2] - L[0][2]);
@@ -52,9 +60,10 @@ export class Race {
   /**
    * `start` (`.ter`): P1's grid slot. The grid (P4) is not at P0[0] on Island, City, Ruin and
    * Factory, so the loop is rotated to begin at the line point nearest to it: laps count from there.
+   * `route`: the track's (TrackInfo.route), see mainLoop.
    */
-  constructor(p0: readonly V3[], ringsLoader: readonly V3[], start?: { x: number; y: number; z: number }) {
-    const L = mainLoop(p0);
+  constructor(p0: readonly V3[], ringsLoader: readonly V3[], start?: { x: number; y: number; z: number }, route?: readonly (readonly [number, number])[]) {
+    const L = mainLoop(p0, route);
     let s = 0;
     if (start) {
       let best = Infinity;

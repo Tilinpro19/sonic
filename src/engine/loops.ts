@@ -1,6 +1,6 @@
 /**
- * Loops and tubes: Resort Island's loop (p219–233), Reactive Factory's (p70–83) and Regal Ruin's
- * corkscrew tube (p243–308). The `.ter` only holds their lower ramps/banks, so the rest can't be
+ * Loops and tubes: Resort Island's loop (p219–233), Reactive Factory's (p70–83), Regal Ruin's
+ * corkscrew tube (p243–308) and Radical Emerald's loop (P0 #221–234, on its route). The `.ter` only holds their lower ramps/banks, so the rest can't be
  * run on. The golden recording of the original (work/tools/golden, Island, two passes) shows the
  * loop is a scripted ride: the world velocity (+2c…+34) and heading (+10) stay frozen at their
  * entry values, gravity is off, pitch (+0c) turns a full 4096 and the racer leaves heading the
@@ -74,7 +74,10 @@ export function loopsOf(line: readonly V3[], col: Collision): Loop[] {
     // Against the heading where the ride starts (a loop's first unsupported step is already
     // turning over); near-vertical steps (a spring's lift) have no heading.
     const d0 = dir(i - LEAD - 1);
-    const reverses = run.some((_, j) => { const d = dir(i + j); return d[2] > 40 && d[0] * d0[0] + d[1] * d0[1] < -0.3; });
+    // ...while climbing over its entry: Emerald's descending spiral (route P0 #283–291, the floor
+    // 120–390 under the line) turns back too, but is driven on.
+    const reverses = run.some((_, j) => { const d = dir(i + j); return d[2] > 40 && d[0] * d0[0] + d[1] * d0[1] < -0.3; })
+      && run.some((p) => run[0][1] - p[1] > 200);
     // (Springs and ramps only climb: the drop must come first.)
     let low = run[0][1], climbsBack = false;
     for (const p of run) { low = Math.max(low, p[1]); if (low - run[0][1] > 50 && low - p[1] > 150) climbsBack = true; }
