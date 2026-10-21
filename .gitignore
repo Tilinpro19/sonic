@@ -8,8 +8,6 @@ Desktop.ini
 
 # Game assets (© SEGA — never committed)
 work/
-public/game/
-dist/game/
 *.7z
 *.rar
 *.iso
