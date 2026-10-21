@@ -1,18 +1,18 @@
-import type { Plugin } from 'vite';
+import type { Plugin, ViteDevServer, PreviewServer } from 'vite';
 import { defineConfig } from 'vitest/config';
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, resolve, normalize, sep } from 'node:path';
 
-// Dev only: serves the user's local Sonic R install at /game/ so the viewer loads it without a
-// folder picker. Never part of the build — the game's assets are SEGA's and are not redistributed.
+// Serves the user's local Sonic R install at /game/ (in dev 'serve' and 'preview') so the viewer
+// loads it without a folder picker. Never part of the build or git repository — the game's assets are SEGA's.
 const GAME_DIR = resolve(process.env.SONICR_DIR ?? '../work/sonicr/app');
-// Local, dev-only replacements (e.g. AI-enhanced textures). Checked before GAME_DIR, same layout.
+// Local replacements (e.g. AI-enhanced textures). Checked before GAME_DIR, same layout.
 const OVERRIDE_DIR = resolve('../work/overrides');
 // AI-upscaled texture pages (PNG), produced by work/tools/hd_textures.py + Real-ESRGAN.
 const HD_DIR = resolve('../work/hd');
 
-function serveDir(server: import('vite').ViteDevServer, mount: string, dir: string, missing = 404) {
+function serveDir(server: ViteDevServer | PreviewServer, mount: string, dir: string, missing = 404) {
   server.middlewares.use(mount, (req, res) => {
     const rel = decodeURIComponent((req.url ?? '/').split('?')[0]);
     const file = normalize(resolve(dir, '.' + rel));
@@ -28,11 +28,15 @@ function serveDir(server: import('vite').ViteDevServer, mount: string, dir: stri
 function localGame(): Plugin {
   return {
     name: 'sonicr-local-game',
-    apply: 'serve',
     configureServer(server) {
       serveDir(server, '/game', GAME_DIR);
       serveDir(server, '/overrides', OVERRIDE_DIR, 204);
       serveDir(server, '/hd', HD_DIR, 204); // optional files: no console noise
+    },
+    configurePreviewServer(server) {
+      serveDir(server, '/game', GAME_DIR);
+      serveDir(server, '/overrides', OVERRIDE_DIR, 204);
+      serveDir(server, '/hd', HD_DIR, 204);
     },
   };
 }
@@ -44,13 +48,18 @@ function localGame(): Plugin {
  */
 function pwa(): Plugin {
   const files = (dir: string): string[] =>
-    existsSync(dir) ? readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => statSync(join(dir, f)).isFile()) : [];
+    existsSync(dir)
+      ? readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => {
+          if (f.startsWith('game' + sep) || f === 'game') return false;
+          return statSync(join(dir, f)).isFile();
+        })
+      : [];
   return {
     name: 'sonicr-pwa',
     apply: 'build',
     generateBundle(_, bundle) {
       const hash = createHash('sha256');
-      const urls = ['./'];
+      const urls = ['./', './index.html'];
       for (const [name, out] of Object.entries(bundle)) {
         hash.update(name).update(out.type === 'chunk' ? out.code : out.source);
         if (name !== 'index.html' && !name.endsWith('.map')) urls.push('./' + name);
@@ -78,7 +87,17 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   if (req.mode === 'navigate') {
     // Network first for the page, so a new deploy shows up on the next visit; cached when offline.
-    e.respondWith(fetch(req).catch(() => caches.open(CACHE).then((c) => c.match('./', { ignoreVary: true }))));
+    e.respondWith(
+      fetch(req).catch(() =>
+        caches.open(CACHE).then((c) =>
+          c.match(req, { ignoreVary: true }).then((hit) =>
+            hit || c.match('./', { ignoreVary: true }).then((res) =>
+              res || c.match('./index.html', { ignoreVary: true })
+            )
+          )
+        )
+      )
+    );
     return;
   }
   // ignoreVary: module scripts and stylesheets send other Origin/Accept headers than addAll did.

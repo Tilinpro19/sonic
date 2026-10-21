@@ -299,3 +299,28 @@ body.driving #panel { display: none; }
 .menu button:focus-visible, .menu input:focus-visible { outline: 3px solid #ffd400; outline-offset: 2px; }
 button.ghost { background: transparent; border: 1px solid var(--line); }
 #hud-menu { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); pointer-events: auto; padding: 6px 14px; opacity: .8; }
+
+/* ---------- Results screen (AG3) ---------- */
+#results { z-index: 15; }
+.results-card { max-width: 480px; padding: 28px 32px; box-sizing: border-box; animation: resultSlide 0.4s ease-out; }
+@keyframes resultSlide { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.results-card h1 { font-size: 48px; margin: 0 0 4px; }
+.results-card h1.pos-1 { color: #ffd700; text-shadow: 0 0 16px rgba(255, 215, 0, 0.5); }
+.results-card h1.pos-2 { color: #d8e4f0; text-shadow: 0 0 14px rgba(216, 228, 240, 0.4); }
+.results-card h1.pos-3 { color: #e69d58; text-shadow: 0 0 14px rgba(230, 157, 88, 0.4); }
+.results-total { font-size: 32px; font-weight: 800; font-style: italic; font-variant-numeric: tabular-nums; color: #fff; margin-bottom: 14px; }
+.results-table { width: 100%; border-collapse: collapse; margin: 0 auto 12px; font-variant-numeric: tabular-nums; }
+.results-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); padding: 4px 12px; border-bottom: 1px solid var(--line); }
+.results-table td { padding: 6px 12px; text-align: center; font-size: 18px; font-weight: 700; font-style: italic; }
+.results-table tr.best td { color: var(--gold); }
+.results-rings { font-size: 16px; color: var(--gold); margin-bottom: 10px; }
+#results-rivals { font-size: 13px; color: var(--muted); margin-bottom: 14px; line-height: 1.6; }
+.results-actions { display: flex; gap: 10px; justify-content: center; }
+.results-actions button { font-size: 16px; padding: 10px 22px; }
+@media (max-width: 600px) {
+  .results-card { padding: 20px 18px; max-width: calc(100vw - 32px); }
+  .results-card h1 { font-size: 36px; }
+  .results-total { font-size: 24px; }
+  .results-table td { font-size: 15px; padding: 4px 8px; }
+  .results-actions button { font-size: 14px; padding: 8px 16px; }
+}

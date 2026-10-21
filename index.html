@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sonic R Web</title>
-    <meta name="description" content="Remasterizado web de Sonic R que funciona con tu propia copia del juego." />
+    <meta name="description" content="Remasterizado web de Sonic R jugable en el navegador." />
     <meta name="theme-color" content="#13228a" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" type="image/png" href="./icons/favicon.png" />
@@ -18,8 +18,8 @@
     <div id="start" class="overlay">
       <div class="card">
         <h1>Sonic R <span>Web</span></h1>
-        <p>Visor de pistas remasterizado. Los archivos del juego no vienen incluidos: elige la carpeta donde tienes instalado tu Sonic R (la que contiene <code>sonicr.exe</code>). Nada sale de tu ordenador.</p>
-        <label class="btn">Elegir carpeta de Sonic R
+        <p>Remasterizado web de Sonic R para navegador. Cargando assets del juego…</p>
+        <label class="btn">Cargar carpeta de juego (opcional)
           <input id="pick" type="file" webkitdirectory hidden />
         </label>
         <p id="start-msg" class="msg"></p>
@@ -101,6 +101,23 @@
       <div id="hud-center"></div>
       <button id="hud-menu" title="Salir (Esc / Start)">☰</button>
       <div class="hud-hint">↑ acelerar · ←→ girar · Espacio saltar · R repetir · Esc salir</div>
+    </div>
+
+    <div id="results" class="overlay" hidden>
+      <div class="card results-card">
+        <h1 id="results-position"></h1>
+        <div id="results-time" class="results-total"></div>
+        <table id="results-laps" class="results-table">
+          <thead><tr><th>Vuelta</th><th>Tiempo</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="results-rings" class="results-rings"></div>
+        <div id="results-rivals"></div>
+        <div class="results-actions">
+          <button id="results-retry">🔄 Repetir</button>
+          <button id="results-exit" class="ghost">☰ Salir</button>
+        </div>
+      </div>
     </div>
 
     <div id="loading" class="overlay" hidden><div class="spinner"></div><p id="loading-msg">Cargando…</p></div>

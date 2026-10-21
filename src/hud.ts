@@ -1,18 +1,26 @@
 /** Race HUD (DOM overlay): rings, lap, clock, lap times, countdown, position rank, and finish banner. */
 import { LAPS, type Race } from './engine/race';
 
-const $ = (id: string) => document.getElementById(id)!;
+const $ = (id: string) => (typeof document !== 'undefined' ? document.getElementById(id) : null);
 const el = {
-  hud: $('hud'),
-  rings: $('hud-rings'),
-  lap: $('hud-lap'),
-  time: $('hud-time'),
-  laps: $('hud-laps'),
-  center: $('hud-center'),
-  speed: $('hud-speed'),
-  rank: $('hud-rank'),
-  pos: $('hud-pos'),
-  posSuffix: $('hud-pos-suffix'),
+  get hud() { return $('hud'); },
+  get rings() { return $('hud-rings'); },
+  get lap() { return $('hud-lap'); },
+  get time() { return $('hud-time'); },
+  get laps() { return $('hud-laps'); },
+  get center() { return $('hud-center'); },
+  get speed() { return $('hud-speed'); },
+  get rank() { return $('hud-rank'); },
+  get pos() { return $('hud-pos'); },
+  get posSuffix() { return $('hud-pos-suffix'); },
+  get results() { return $('results'); },
+  get resultsPos() { return $('results-position'); },
+  get resultsTime() { return $('results-time'); },
+  get resultsLaps() { return $('results-laps')?.querySelector('tbody'); },
+  get resultsRings() { return $('results-rings'); },
+  get resultsRivals() { return $('results-rivals'); },
+  get resultsRetry() { return $('results-retry'); },
+  get resultsExit() { return $('results-exit'); },
 };
 
 /** Sonic R style clock: 1'23"45. */
@@ -23,15 +31,18 @@ export const fmt = (s: number) => {
 
 let last = '';
 export function showHud(on: boolean) {
-  el.hud.hidden = !on;
+  if (el.hud) el.hud.hidden = !on;
+  if (el.results) el.results.hidden = true;
   last = '';
 }
 
 /** Ring pickup: the counter bumps. */
 export function ringFlash() {
-  el.rings.classList.remove('bump');
-  void el.rings.offsetWidth; // restart the CSS animation
-  el.rings.classList.add('bump');
+  const rings = el.rings;
+  if (!rings) return;
+  rings.classList.remove('bump');
+  void rings.offsetWidth; // restart the CSS animation
+  rings.classList.add('bump');
 }
 
 export interface StandingSummary {
@@ -41,6 +52,23 @@ export interface StandingSummary {
   isPlayer?: boolean;
 }
 
+function setupResultsButtons() {
+  const retryBtn = el.resultsRetry;
+  const exitBtn = el.resultsExit;
+  if (retryBtn && !retryBtn.dataset.bound) {
+    retryBtn.dataset.bound = 'true';
+    retryBtn.addEventListener('click', () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyR' }));
+    });
+  }
+  if (exitBtn && !exitBtn.dataset.bound) {
+    exitBtn.dataset.bound = 'true';
+    exitBtn.addEventListener('click', () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape' }));
+    });
+  }
+}
+
 export function updateHud(
   race: Race,
   countdownTicks: number,
@@ -48,8 +76,8 @@ export function updateHud(
   playerRank = 1,
   standings?: readonly StandingSummary[],
 ) {
-  el.time.textContent = fmt(race.time);
-  el.speed.textContent = `${Math.round(speedKmh)} km/h`;
+  if (el.time) el.time.textContent = fmt(race.time);
+  if (el.speed) el.speed.textContent = `${Math.round(speedKmh)} km/h`;
 
   // Update live rank badge
   if (el.pos) {
@@ -73,16 +101,50 @@ export function updateHud(
   if (key === last) return;
   last = key;
 
-  el.rings.textContent = String(race.ringCount);
-  el.lap.textContent = `${Math.min(race.lap, LAPS)}/${LAPS}`;
+  if (el.rings) el.rings.textContent = String(race.ringCount);
+  if (el.lap) el.lap.textContent = `${Math.min(race.lap, LAPS)}/${LAPS}`;
   const best = race.lapTimes.length ? Math.min(...race.lapTimes) : -1;
-  el.laps.innerHTML = race.lapTimes
-    .map((t, i) => `<li${t === best && race.lapTimes.length > 1 ? ' class="best"' : ''}>V${i + 1} ${fmt(t)}</li>`)
-    .join('');
-  el.center.textContent = center;
-  el.center.className = race.finished ? 'finish' : center ? 'count' : '';
+  if (el.laps) {
+    el.laps.innerHTML = race.lapTimes
+      .map((t, i) => `<li${t === best && race.lapTimes.length > 1 ? ' class="best"' : ''}>V${i + 1} ${fmt(t)}</li>`)
+      .join('');
+  }
+  if (el.center) {
+    el.center.textContent = center;
+    el.center.className = race.finished ? 'finish' : center ? 'count' : '';
+  }
 
   if (race.finished) {
+    if (el.results) {
+      el.results.hidden = false;
+      setupResultsButtons();
+
+      if (el.resultsPos) {
+        el.resultsPos.textContent = rankWord;
+        el.resultsPos.className = `pos-${Math.min(playerRank, 4)}`;
+      }
+
+      if (el.resultsTime) {
+        el.resultsTime.textContent = fmt(race.time);
+      }
+
+      if (el.resultsLaps) {
+        el.resultsLaps.innerHTML = race.lapTimes
+          .map((t, i) => `<tr${t === best && race.lapTimes.length > 1 ? ' class="best"' : ''}><td>Vuelta ${i + 1}</td><td>${fmt(t)}</td></tr>`)
+          .join('');
+      }
+
+      if (el.resultsRings) {
+        el.resultsRings.textContent = `Anillos recogidos: ${race.ringCount}`;
+      }
+
+      if (el.resultsRivals && standings && standings.length > 1) {
+        el.resultsRivals.innerHTML = standings
+          .map((s) => `<div>${s.rank}º ${s.name}: ${s.finishTime > 0 ? fmt(s.finishTime) : 'En carrera'}</div>`)
+          .join('');
+      }
+    }
+
     let summaryHtml = `<small>${fmt(race.time)} · ${race.ringCount} anillos · R para repetir</small>`;
     if (standings && standings.length > 1) {
       const rivalsText = standings
@@ -90,6 +152,8 @@ export function updateHud(
         .join(' · ');
       summaryHtml += `<small style="font-size: 15px; margin-top: 6px; color: var(--muted);">${rivalsText}</small>`;
     }
-    el.center.insertAdjacentHTML('beforeend', summaryHtml);
+    el.center?.insertAdjacentHTML('beforeend', summaryHtml);
+  } else {
+    if (el.results) el.results.hidden = true;
   }
 }

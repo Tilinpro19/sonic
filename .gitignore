@@ -1,4 +1,21 @@
 node_modules
 dist
+
+# OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# Game assets (© SEGA — never committed)
+work/
+public/game/
+dist/game/
+*.7z
+*.rar
+*.iso
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
